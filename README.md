@@ -1,4 +1,4 @@
-# ELF_GLIBC_VersionDegradation
+# ELF_GLibcVersionDegradation
 
 项目参考至ReferenceData/ModifiersSolym.c文件  
 reference data is ReferenceData/ModifiersSolym.c
