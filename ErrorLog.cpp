@@ -1,13 +1,15 @@
 #include "ErrorLog.h"
 #include <unistd.h>
 #include <cstring>
-#include <cstdio>
+#include <cstdio> // GetExePath 仍在使用C-Style API
+
 #ifndef __APPLE__
     #include <linux/limits.h>
 #else
     #ifndef PATH_MAX
         #define PATH_MAX 4096
     #endif
+    #include <libproc.h> // for proc_pidpath
 #endif
 
 ErrorLog *ErrorLog::getErrorLog()
@@ -18,10 +20,24 @@ ErrorLog *ErrorLog::getErrorLog()
 
 ErrorLog::ErrorLog()
 {
-    string path,name;
-    if(GetExePath(path,name))
+    string path, name;
+    if(GetExePath(path, name))
     {
-        fp = fopen(string(path + "/" + name + "Errlog.txt").c_str(),"w");
+        string logFilePath = path + "/" + name + "Errlog.txt";
+        // 构造时打开文件
+        logFile.open(logFilePath.c_str(), ios::out | ios::trunc);
+    }
+}
+
+// 析构函数已在 .h 中 default
+
+void ErrorLog::putErrInfo(const string& err, const string& err2)
+{
+    if(logFile.is_open())
+    {
+        string line = err + "  文件:" + err2 + "\n";
+        logFile << line;
+        logFile.flush(); // 确保日志立即写入
     }
 }
 
@@ -29,48 +45,28 @@ bool ErrorLog::GetExePath(string &strPath, string &strProcessName)
 {
     char processdir[PATH_MAX];
     char * path_end;
+    int str_len = 0;
+
 #ifdef __APPLE__
-    char pathBuffer[PROC_PIDPATHINFO_MAXSIZE];
-    bzero(pathBuffer, PROC_PIDPATHINFO_MAXSIZE);
-    int str_len = proc_pidpath(getpid(), pathBuffer, sizeof(pathBuffer));
-    memcpy(processdir, pathBuffer, str_len);
+    str_len = proc_pidpath(getpid(), processdir, sizeof(processdir));
 #else
-    int str_len = readlink("/proc/self/exe", processdir,PATH_MAX);
+    str_len = readlink("/proc/self/exe", processdir, PATH_MAX);
 #endif
+
     if(str_len <= 0)
         return false;
     processdir[str_len] = '\0';
 
     path_end = strrchr(processdir, '/');
-    if(path_end == NULL)
+    if(path_end == nullptr)
         return false;
-    ++path_end;
-
-    char processname[PATH_MAX];
-    strcpy(processname, path_end);
-
-    strProcessName = processname;
+    
+    // 提取进程名
+    strProcessName = (path_end + 1);
+    
+    // 提取路径
     *path_end = '\0';
     strPath = processdir;
+    
     return true;
 }
-
-ErrorLog::~ErrorLog()
-{
-    if(fp)
-    {
-        fclose(fp);
-        fp = NULL;
-    }
-}
-
-void ErrorLog::putErrInfo(string err, string err2)
-{
-    if(fp)
-    {
-        string line = err + "  文件:" + err2 + "\n";
-        fputs(line.c_str(),fp);
-    }
-    return;
-}
-

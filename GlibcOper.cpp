@@ -5,108 +5,98 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <sys/stat.h>
+#include <set>
+#include <utility>
 
-GlibcOper::GlibcOper()
-{
-
-}
-
-GlibcOper::~GlibcOper()
-{
-    if(glibcPtrs)
-    {
-        delete glibcPtrs;
-        glibcPtrs = NULL;
-    }
-    if(targetElfPtrs)
-    {
-        delete targetElfPtrs;
-        targetElfPtrs = NULL;
-    }
-}
-
-void GlibcOper::initGlibcInfo(string glibcPath)
+void GlibcOper::initGlibcInfo(const string& glibcPath)
 {
     if(glibcPtrs) return;
-    glibcPtrs = new ElfPtrs(0);
+     (注意: make_unique 是 C++14, 所以用 new)
+    glibcPtrs.reset(new ElfPtrs(ElfOpenMode::ReadOnly));
     if(!glibcPtrs)
     {
-        ErrorLog::getErrorLog()->putErrInfo("初始化GlibcElf失败",glibcPath);
+        ErrorLog::getErrorLog()->putErrInfo("初始化GlibcElf失败(new)", glibcPath);
         return;
     }
     if(!glibcPtrs->initPtrs(glibcPath.c_str()))
     {
-        ErrorLog::getErrorLog()->putErrInfo("initGlibcPtrs失败",glibcPath);
+        ErrorLog::getErrorLog()->putErrInfo("initGlibcPtrs失败", glibcPath);
         return;
     }
 
     Elf64_Verdef *verdef = glibcPtrs->verdef;
     Elf64_Verdef *next_verdef;
-    vector<string> dynsymStrs_vct;
-    // 遍历 .gnu.version_d 表d define
+    set<string> seenVersions;
+
     for (int last = 0; !last; verdef = next_verdef)
     {
         if(verdef->vd_flags == 0)
         {
-            Elf64_Verdaux *daux = (typeof(daux))((char *)verdef + verdef->vd_aux);
+            Elf64_Verdaux *daux = reinterpret_cast<Elf64_Verdaux*>((char *)verdef + verdef->vd_aux);
             Elf64_Verdaux *next_daux;
-            // 获取 Elf64_Verdaux 数组的元素数，首个元素
-            // 遍历 Elf64_Verdaux 数组（记录每一个依赖版本的信息）
+
             for (int cnt = verdef->vd_aux; cnt--; daux = next_daux)
             {
-                char *name = glibcPtrs->dynstr + daux->vda_name; // GLIBC_xxx 字符串
-                bool add = true;
-                for(int j = 0; j < glibcVersionInfo_vct.size(); ++j)
-                    if(strcmp(glibcVersionInfo_vct[j].first.first.c_str(),name) == 0)
-                        add = false;
-                if(add)
+                char *name = glibcPtrs->dynstr + daux->vda_name;
+
+                if(seenVersions.find(name) == seenVersions.end())
                 {
-                    dynsymStrs_vct.clear();
+                    seenVersions.insert(name);
+                    GlibcVersionInfo versionInfo;
+                    versionInfo.name = name;
+                    versionInfo.id = verdef->vd_ndx;
+
                     for (int i = 1; i < glibcPtrs->sh_version->sh_size / sizeof(unsigned short); i++)
                     {
-                        string dynsym = string(glibcPtrs->dynstr + glibcPtrs->dynsym[i].st_name);
-                        if(glibcPtrs->versions[i] == verdef->vd_ndx && dynsym != name)
-                            dynsymStrs_vct.push_back(string(glibcPtrs->dynstr + glibcPtrs->dynsym[i].st_name));
+                        if(glibcPtrs->versions[i] == verdef->vd_ndx)
+                        {
+                            string dynsym = string(glibcPtrs->dynstr + glibcPtrs->dynsym[i].st_name);
+                            if(dynsym != name)
+                                versionInfo.symbols.push_back(move(dynsym));
+                        }
                     }
-                    glibcVersionInfo_vct.push_back(pair<pair<string, int>, vector<string> >(pair<string, int>(name,verdef->vd_ndx),dynsymStrs_vct));
+                    glibcVersionInfo_vct.push_back(move(versionInfo));
                 }
-                // 指向下一个元素
-                next_daux = (typeof(next_daux))((char *)daux + daux->vda_next);
+                next_daux = reinterpret_cast<Elf64_Verdaux*>((char *)daux + daux->vda_next);
             }
         }
-        // 获取下一个 表项
-        next_verdef = (typeof(next_verdef))((char *)verdef + verdef->vd_next);
-        // 判断当前是否是最后一个表项了
+        next_verdef = reinterpret_cast<Elf64_Verdef*>((char *)verdef + verdef->vd_next);
         last = verdef->vd_next == 0;
     }
     showGlibcInfo();
 }
 
-void GlibcOper::showGlibcInfo(bool showDynsym)
+void GlibcOper::showGlibcInfo(bool showDynsym) const
 {
+    const char* reset = "\033[0m";
+    const char* bold = "\033[1m";
+    const char* redBold = "\033[31;1m";
+
     if(showDynsym)
-        cout<<"\033[1m目标GLIBC所支持的版本及对应符号表如下:\033[0m"<<endl;
+        cout << bold << "目标GLIBC所支持的版本及对应符号表如下:" << reset << endl;
     else
-        cout<<"\033[1m目标GLIBC所支持的版本如下:\033[0m"<<endl;
-    for(auto ver : glibcVersionInfo_vct)
+        cout << bold << "目标GLIBC所支持的版本如下:" << reset << endl;
+
+    for (const auto& ver : glibcVersionInfo_vct)
     {
-        cout<<"\033[31;1m"<<ver.first.first<<" "<<ver.first.second<<"\033[0m"<<endl;
+        cout << redBold << ver.name << " " << ver.id << reset << endl;
         if(showDynsym)
         {
             int i = 0;
-            for(auto dynsym : ver.second)
+            for(const auto& dynsym : ver.symbols)
             {
-                cout<<dynsym<<" ";
+                cout << dynsym << " ";
                 if(i % 10 == 0 && i != 0)
-                    cout<<endl;
+                    cout << endl;
                 ++i;
             }
-            cout<<endl;
+            cout << endl;
         }
     }
 }
 
-void GlibcOper::adaptedTargets(string path)
+void GlibcOper::adaptedTargets(const string& path)
 {
     DIR *dir = opendir(path.c_str());
     targetMaxPathLen = path.size() + 4;
@@ -114,10 +104,16 @@ void GlibcOper::adaptedTargets(string path)
     {
         closedir(dir);
         getAllElf(path.c_str());
-        for(string str : targetElf_vct)
-            if(str.size() > targetMaxPathLen) targetMaxPathLen = str.size() +4;
-        for(string str : targetElf_vct)
+
+        for(const auto& str : targetElf_vct)
+        {
+            if(str.size() > targetMaxPathLen) targetMaxPathLen = str.size() + 4;
+        }
+
+        for(const auto& str : targetElf_vct)
+        {
             adaptedTargetElfFileGlibcVersion(str);
+        }
     }
     else
         adaptedTargetElfFileGlibcVersion(path);
@@ -126,38 +122,30 @@ void GlibcOper::adaptedTargets(string path)
 
 void GlibcOper::clearContainer()
 {
-    if(targetElfPtrs)
-    {
-        delete targetElfPtrs;
-        targetElfPtrs = NULL;
-    }
+    targetElfPtrs.reset();
     targetVersionInfo_vct.clear();
     validIndexAndId_vct.clear();
-    return;
 }
 
 void GlibcOper::getAllElf(const char *dir)
 {
-    DIR *d; //声明一个句柄
-    struct dirent *file; //readdir函数的返回值就存放在这个结构体中
+    DIR *d;
+    struct dirent *file;
     struct stat sb;
     string filePath;
 
     if(!(d = opendir(dir))) return;
     while((file = readdir(d)) != NULL)
     {
-        //把当前目录.，上一级目录都去掉，避免死循环遍历目录
         if(strcmp(file->d_name, ".") == 0 || strcmp(file->d_name, "..") == 0)
             continue;
         filePath = string(dir) + "/" + file->d_name;
         if(stat(filePath.c_str(), &sb) >= 0)
         {
-            //判断该文件是否是目录且非链接文件
             if(S_ISDIR(sb.st_mode) && !S_ISLNK(sb.st_mode))
                 getAllElf(filePath.c_str());
             else if(S_ISREG(sb.st_mode))
             {
-                //只是添加Elf文件
                 if(isElf(filePath.c_str()))
                     targetElf_vct.push_back(filePath);
             }
@@ -167,129 +155,179 @@ void GlibcOper::getAllElf(const char *dir)
     return;
 }
 
-bool GlibcOper::isElf(const char *file)
+bool GlibcOper::isElf(const char *file) const
 {
     bool ret = false;
-    int fd = 0;
-    char elfHead[7] = {0x7f,0x45,0x4c,0x46,0x02,0x01,0x01};
+    const char elfHead[7] = {0x7f,0x45,0x4c,0x46,0x02,0x01,0x01};
     char targetHead[7] = { 0 };
-    fd = open(file,O_RDONLY);
+    int fd = 0;
+
+    fd = open(file, O_RDONLY);
     if(fd < 0) return false;
+
     if(sizeof(targetHead) == read(fd,targetHead,sizeof(targetHead)))
-        if(!memcmp(elfHead,targetHead,sizeof(targetHead))) ret = true;
+        if(memcmp(elfHead,targetHead,sizeof(targetHead)) == 0) ret = true;
     close(fd);
     return ret;
 }
 
-bool GlibcOper::adaptedTargetElfFileGlibcVersion(string path)
+bool GlibcOper::adaptedTargetElfFileGlibcVersion(const string& path)
 {
     clearContainer();
-    if(!glibcVersionInfo_vct.size()) return false;
-    targetElfPtrs = new ElfPtrs(1);
+    if(glibcVersionInfo_vct.empty()) return false;
+
+    targetElfPtrs.reset(new ElfPtrs(ElfOpenMode::ReadWrite));
     if(!targetElfPtrs)
     {
-        ErrorLog::getErrorLog()->putErrInfo("初始化TargetElf失败",path);
+        ErrorLog::getErrorLog()->putErrInfo("初始化TargetElf失败(new)", path);
         return false;
     }
     if(!targetElfPtrs->initPtrs(path.c_str()))
     {
-        ErrorLog::getErrorLog()->putErrInfo("initTargetPtrs失败",path);
+        ErrorLog::getErrorLog()->putErrInfo("initTargetPtrs失败", path);
         return false;
     }
 
-    if(!checkFountDynsym()) return false;
-    /**
-    * typedef struct {
-    *         Elf64_Half      vn_version;
-    *         // 此成员标识该结构的版本(0表示无效版本)
-    *         Elf64_Half      vn_cnt;
-    *          // Elf64_Vernaux 数组中的元素数目
-    *         Elf64_Word      vn_file;
-    *         // 以空字符结尾的字符串的字符串表偏移，用于提供版本依赖性的文件名。此名称与文件中找到的 .dynamic 依赖项之一匹配。
-    *         Elf64_Word      vn_aux;
-    *         // 字节偏移，范围从此 Elf64_Verneed 项的开头到关联文件依赖项所需的版本定义的 Elf64_Vernaux数组。必须存在至少一种版本依赖性。也可以存在其他版本依赖性，具体数目由 vn_cnt 值表示。
-    *         Elf64_Word      vn_next;
-    *         // 从此 Elf64_Verneed 项的开头到下一个 Elf64_Verneed 项的字节偏移
-    * } Elf64_Verneed;
-    */
-    // 获取下一个 表项
-    Elf64_Verneed *next_verneed = (Elf64_Verneed *)((char *)targetElfLibcVerneed + targetElfLibcVerneed->vn_next);
-    // 获取 Elf64_Vernaux 数组的结尾
-    char *end_of_naux = (char *)next_verneed;
-    // 判断当前是否是最后一个表项了
-    if (targetElfLibcVerneed->vn_next == 0)
-        end_of_naux = (char *)targetElfPtrs->elf_hdr + targetElfPtrs->sh_version_r->sh_offset + targetElfPtrs->sh_version_r->sh_size;
+    if(!checkFoundDynsym()) return false;
 
-    /**
-    * typedef struct {
-    *         Elf64_Word       vna_hash;     // 版本依赖性名称的散列值
-    *         Elf64_Half         vna_flags;    // 版本依赖性特定信息(VER_FLG_WEAK[0x2]弱版本标识符)
-    *         Elf64_Half        vna_other;    // 目前未使用
-    *         Elf64_Word      vna_name;    // 以空字符结尾的字符串的字符串表偏移，用于提供版本依赖性的名称。
-    *         Elf64_Word        vna_next;    // 从此 Elf64_Vernaux 项的开头到下一个 Elf64_Vernaux 项的字节偏移
-    * } Elf64_Vernaux;
-    */
-    // 获取 Elf64_Vernaux 数组的元素数，首个元素
-    Elf64_Vernaux *naux = (Elf64_Vernaux *)((char *)targetElfLibcVerneed + targetElfLibcVerneed->vn_aux);
-    Elf64_Vernaux *next_naux;
-    // 遍历 Elf64_Vernaux 数组（记录每一个依赖版本的信息）
-    for (unsigned cnt = targetElfLibcVerneed->vn_cnt; cnt--; naux = next_naux)
+    // 不再使用 memmove，因为它会破坏文件偏移和节区大小。
+    // 相反，通过修改 Elf64_Vernaux 链表指针 (vna_next)
+    // 和 Elf64_Verneed 的起始指针 (vn_aux) 来 "跳过" (Bypass)
+    // 不需要的数据块。数据块本身保留在文件中，但动态链接器
+    // 将不再访问它们，这样文件结构保持一致。
+
+    unsigned removed_count = 0;
+    unsigned original_cnt = 0;
+
+    // 确保 targetElfLibcVerneed 是有效的
+    if (targetElfLibcVerneed)
     {
-        char *name = targetElfPtrs->dynstr + naux->vna_name; // GLIBC_xxx 字符串
-        // 指向下一个元素
-        next_naux = (typeof(next_naux))((char *)naux + naux->vna_next);
-        //如果本地glibc库没有包含elf文件所需要的版本
-        if(containsVersion(name).second == -1)
-        {
-            // 将整个 Elf64_Vernaux 数组当前项后面元素向前移动
-            // 也就是将当前项从数组中移除掉
-            if (cnt > 0 /*剩余未处理元素必须大于0，才需要*/ )
-            {
-                memmove(naux, next_naux, end_of_naux - (char *)next_naux);
-            }
-            // 下一个指向当前，也就是前移一个元素（因为这个元素已经被覆盖了，或者就是最后一个）
-            next_naux = naux;
-        }
+        original_cnt = targetElfLibcVerneed->vn_cnt; // 保存原始计数值
     }
 
-    for(int i = 0;i<validIndexAndId_vct.size();++i)
+    // 检查 targetElfLibcVerneed 是否有效，以及它是否有条目
+    if (targetElfLibcVerneed && original_cnt > 0 && targetElfLibcVerneed->vn_aux != 0)
     {
-        if(targetVersionInfo_vct[validIndexAndId_vct[i].first.second].second != validIndexAndId_vct[i].second.second)
+        Elf64_Vernaux *naux = reinterpret_cast<Elf64_Vernaux *>((char *)targetElfLibcVerneed + targetElfLibcVerneed->vn_aux);
+        Elf64_Vernaux *prev_naux = nullptr; // 跟踪前一个保留的条目
+
+        // 遍历所有原始条目
+        for (unsigned cnt = 0; cnt < original_cnt; ++cnt)
         {
-            const char* dynsymName = targetElfPtrs->dynstr + targetElfPtrs->dynsym[validIndexAndId_vct[i].first.first].st_name;
-            // 打印修改过程
-            printf("  修改 %-20s: %-12s(%02u) ----> %-12s(%02u)  文件:%-20s\n",dynsymName,targetVersionInfo_vct[validIndexAndId_vct[i].first.second].first.c_str(),
-                    (unsigned short)targetVersionInfo_vct[validIndexAndId_vct[i].first.second].second,validIndexAndId_vct[i].second.first.c_str(),
-                    (unsigned short)validIndexAndId_vct[i].second.second,path.c_str());
-            // 修改与本地对应版本
-            targetElfPtrs->versions[validIndexAndId_vct[i].first.first] = validIndexAndId_vct[i].second.second; // 这里也可以写成 =0 (local defualt)
+            char *name = targetElfPtrs->dynstr + naux->vna_name;
+
+            // 必须在修改 *之前* 获取下一个条目的指针
+            Elf64_Vernaux *next_naux = nullptr;
+            if (naux->vna_next != 0)
+                next_naux = reinterpret_cast<Elf64_Vernaux*>((char *)naux + naux->vna_next);
+
+            if(containsVersion(name).second == -1) // Glibc库没有这个版本 -> 移除
+            {
+                removed_count++;
+                if (prev_naux)
+                {
+                    // [情况A: 移除中间或末尾的条目]
+                    // 将前一个条目的 'next' 指针指向当前条目的 'next' 指针，
+                    // 从而在链表中 "跳过" 当前条目。
+                    prev_naux->vna_next = naux->vna_next;
+                }
+                else
+                {
+                    // [情况B: 移除第一个条目]
+                    // 我们必须更新 Elf64_Verneed 结构中的 vn_aux (起始偏移)
+                    // 使其指向 *下一个* 条目。
+                    if (next_naux)
+                    {
+                        // 新的起始偏移是 'next_naux' 相对于 'targetElfLibcVerneed' 的偏移
+                        targetElfLibcVerneed->vn_aux = (char*)next_naux - (char*)targetElfLibcVerneed;
+                    }
+                    else
+                    {
+                        // 我们移除了唯一的条目。起始偏移置为0。
+                        targetElfLibcVerneed->vn_aux = 0;
+                    }
+                }
+                // 'prev_naux' 保持不变，因为它仍然是上一个 *被保留* 的条目。
+            }
+            else // Glibc库有这个版本 -> 保留
+            {
+                // [情况C: 保留条目]
+                // 此条目被保留，它成为下一次迭代的 "前一个条目"。
+                prev_naux = naux;
+            }
+
+            naux = next_naux; // 总是移动到下一个条目
+            if (naux == nullptr) break; // 已到达链表末尾
+        }
+    }
+    else if (targetElfLibcVerneed)
+    {
+        // 确保没有条目时计数器为0
+        targetElfLibcVerneed->vn_cnt = 0;
+    }
+
+    // 循环结束后，更新 vn_cnt 计数器
+    if (targetElfLibcVerneed && removed_count > 0)
+    {
+        targetElfLibcVerneed->vn_cnt -= removed_count;
+    }
+
+    for(const auto& patch : validIndexAndId_vct)
+    {
+        if(targetVersionInfo_vct[patch.originalTargetVersionIndex].id != patch.hostVersionId)
+        {
+            const char* dynsymName = targetElfPtrs->dynstr + targetElfPtrs->dynsym[patch.symbolIndex].st_name;
+
+            printf("  修改 %-20s: %-12s(%02u) ----> %-12s(%02u)  文件:%-20s\n",
+                   dynsymName,
+                   targetVersionInfo_vct[patch.originalTargetVersionIndex].name.c_str(),
+                   (unsigned short)targetVersionInfo_vct[patch.originalTargetVersionIndex].id,
+                   patch.hostVersionName.c_str(),
+                   (unsigned short)patch.hostVersionId,
+                   path.c_str());
+
+            targetElfPtrs->versions[patch.symbolIndex] = patch.hostVersionId;
         }
     }
     return true;
 }
 
-bool GlibcOper::checkFountDynsym()
+bool GlibcOper::checkFoundDynsym()
 {
     bool ret = true;
-    targetElfLibcVerneed = NULL;
+    targetElfLibcVerneed = nullptr;
     Elf64_Verneed *verneed = targetElfPtrs->verneed;
+
+    // 健壮性检查: 确保 verneed 不是 nullptr
+    if (!verneed)
+    {
+        ErrorLog::getErrorLog()->putErrInfo("未能找到 .gnu.version_r 节区或内容为空", targetElfPtrs->getFilePath());
+        return false;
+    }
+
     while(true)
     {
         if(strcmp(targetElfPtrs->dynstr + verneed->vn_file, "libc.so.6"))
         {
             if(verneed->vn_next == 0) break;
-            verneed = (typeof(verneed))((char *)verneed + verneed->vn_next);
+            verneed = reinterpret_cast<Elf64_Verneed*>((char *)verneed + verneed->vn_next);
             continue;
         }
+
         targetElfLibcVerneed = verneed;
-        Elf64_Vernaux *naux = (typeof(naux))((char *)verneed + verneed->vn_aux);
-        while(true)
+
+        // 健壮性检查: 确保 vn_aux 是有效的偏移
+        if (verneed->vn_cnt > 0 && verneed->vn_aux != 0)
         {
-            char *name = targetElfPtrs->dynstr + naux->vna_name;
-            targetVersionInfo_vct.push_back(pair<string,int>(name,naux->vna_other));
-            //printf("name = %s  naux->vna_other = %d\n",name,naux->vna_other);
-            if(naux->vna_next == 0) break;
-            naux = (typeof(naux))((char *)naux + naux->vna_next);
+            Elf64_Vernaux *naux = reinterpret_cast<Elf64_Vernaux*>((char *)verneed + verneed->vn_aux);
+            while(true)
+            {
+                char *name = targetElfPtrs->dynstr + naux->vna_name;
+                targetVersionInfo_vct.push_back({string(name), naux->vna_other});
+
+                if(naux->vna_next == 0) break;
+                naux = reinterpret_cast<Elf64_Vernaux*>((char *)naux + naux->vna_next);
+            }
         }
         break;
     }
@@ -304,58 +342,63 @@ bool GlibcOper::checkFountDynsym()
         unsigned short v = targetElfPtrs->versions[i];
         unsigned hveridx = 0;
         for (; hveridx < targetVersionInfo_vct.size(); ++hveridx)
-            if (v == targetVersionInfo_vct[hveridx].second) break;
+            if (v == targetVersionInfo_vct[hveridx].id) break;
         if (hveridx == targetVersionInfo_vct.size()) continue;
 
         const char* dynsymName = targetElfPtrs->dynstr + targetElfPtrs->dynsym[i].st_name;
-        pair<string, int> verAndId = containsDynsym(string(dynsymName));
+        auto verAndId = containsDynsym(string(dynsymName));
         if(verAndId.second == -1)
         {
             char errInfo[2048] = { 0 };
-            sprintf(errInfo,"目标C库中未找到符号:%-20s    GLIBC版本:%-10s",dynsymName,targetVersionInfo_vct[hveridx].first.c_str());
+            sprintf(errInfo,"目标C库中未找到符号:%-20s    GLIBC版本:%-10s", dynsymName, targetVersionInfo_vct[hveridx].name.c_str());
             ErrorLog::getErrorLog()->putErrInfo(errInfo, targetElfPtrs->getFilePath());
             ret = false;
         }
         else
         {
-            //查找目标elf中对应版本的id
-            for(auto vInfo : targetVersionInfo_vct)
-                if(vInfo.first == verAndId.first)
+            int hostIdInTarget = -1;
+            for(const auto& vInfo : targetVersionInfo_vct)
+            {
+                if(vInfo.name == verAndId.first)
                 {
-                    verAndId.second = vInfo.second;
+                    hostIdInTarget = vInfo.id;
                     break;
                 }
-            if(verAndId.second != -1)
-                validIndexAndId_vct.push_back(pair<pair<int,int>,pair<string,int>>(pair<int,int>(i,hveridx),verAndId));
+            }
+
+            if(hostIdInTarget != -1)
+            {
+                validIndexAndId_vct.push_back({i, (int)hveridx, verAndId.first, hostIdInTarget});
+            }
             else
             {
-                ErrorLog::getErrorLog()->putErrInfo("未能找到目标elf中对应版本的id",targetElfPtrs->getFilePath());
+                ErrorLog::getErrorLog()->putErrInfo("未能找到目标elf中对应版本的id", targetElfPtrs->getFilePath());
                 ret = false;
             }
         }
     }
-    return ret;
+    return true;
 }
 
-pair<string, int> GlibcOper::containsVersion(string version)
+pair<string, int> GlibcOper::containsVersion(const string& version) const
 {
-    for(auto ver : glibcVersionInfo_vct)
+    for (const auto& ver : glibcVersionInfo_vct)
     {
-        if(ver.first.first == version)
-            return ver.first;
+        if(ver.name == version)
+            return {ver.name, ver.id};
     }
-    return pair<string, int>("",-1);
+    return {"", -1};
 }
 
-pair<string, int> GlibcOper::containsDynsym(string dynsym)
+pair<string, int> GlibcOper::containsDynsym(const string& dynsym) const
 {
-    for(auto ver : glibcVersionInfo_vct)
+    for (const auto& ver : glibcVersionInfo_vct)
     {
-        for(auto str : ver.second)
+        for (const auto& str : ver.symbols)
         {
             if(str == dynsym)
-                return ver.first;
+                return {ver.name, ver.id};
         }
     }
-    return pair<string, int>("",-1);
+    return {"", -1};
 }
