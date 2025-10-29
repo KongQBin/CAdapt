@@ -12,7 +12,6 @@
 void GlibcOper::initGlibcInfo(const string& glibcPath)
 {
     if(glibcPtrs) return;
-     (注意: make_unique 是 C++14, 所以用 new)
     glibcPtrs.reset(new ElfPtrs(ElfOpenMode::ReadOnly));
     if(!glibcPtrs)
     {
