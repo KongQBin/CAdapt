@@ -1,3 +1,12 @@
+<p align="center">
+  <a href="./README_en.md">English</a>
+  &middot;
+  <a href="./README.md">简/</a>
+  <a href="./README_zh-Hant.md">繁體中文</a>
+  &middot;
+  <a href="./README_ja.md">日本語</a>
+</p>
+
 # GLIBC 符号版本适配工具
 本项目是一个ELF工具，用于修改ELF文件或指定目录中的所有ELF文件，使其适应不同版本的 GLIBC (`libc.so.6`)。
 项目思路参考自 `ReferenceData/ModifiersSolym.c` 文件（该文件中包含了一些注释，可供参考）。
@@ -25,61 +34,3 @@
 - 稳定性风险: 对于结构特殊的ELF文件，适配过程有小概率触发段错误。
 - 数据备份: 虽然程序对文件操作进行了容错处理（使用 mmap 和 msync），但鉴于此工具的底层修改特性，强烈建议在使用前备份所有目标ELF文件，以防万一。
 
-# GLIBC Symbol Version Adapter
-This project is an ELF utility designed to modify an ELF file, or all ELF files within a directory, to adapt them to a different version of GLIBC (libc.so.6).
-The project concept is based on ReferenceData/ModifiersSolym.c (which contains comments that may be useful for reference).
-
-**Key Difference:**
-Unlike the reference file (which uses fixed, hard-coded versions), this project is more powerful:
-1. It automatically parses all supported symbol versions from a user-provided libc.so.6 (argument 1).
-2. It automatically patches the symbol version dependencies in the target ELF file or directory (argument 2) to be compatible with the provided libc.
-
-**Usage:**
-```bash
-#./[program_name] [path/to/host/libc.so.6] [path/to/target_elf_or_directory]
-./your_program /path/to/your/libc.so.6 /path/to/target_elf_or_directory
-```
-
-# WARNING: ABI COMPATIBILITY
-
-- It does not, and cannot, check for or fix ABI (Application Binary Interface) incompatibilities caused by the GLIBC change.
-- This tool only modifies the symbol version metadata within the ELF file (the .gnu.version and .gnu.version_r sections).
-- If a function (e.g., memcpy or fopen) has different behavior, parameters, or internal data structures (struct) between the old and new libc versions, the program will very likely crash (e.g., Segmentation Fault) or produce corrupt data at runtime, even if the symbol version was "downgraded" successfully.
-- This tool assumes YOU have independently verified that the ABIs between the old and new GLIBC versions are fully compatible. Use only if you know exactly what you are doing.
-
-**Other Disclaimers and Risks**
-
-- Symbol Dependency: Successful adaptation requires that all symbols used by the target ELF must physically exist in the provided (usually older) libc.so.6.
-- Error Log: If adaptation fails, check the error log (e.g., Errlog.txt) in the program's directory. The log will specify which file and which symbol caused the failure.
-- Stability Risk: There is a small chance of a segmentation fault when processing certain complex or unusual ELF files.
-- BACKUP YOUR FILES: Although the tool has fault tolerance (using mmap and msync), given the low-level nature of this operation, it is strongly recommended to back up all target ELF files before use to prevent data loss.
-
-# GLIBC シンボルバージョン適応ツール
-このプロジェクトは、ELFファイル、または指定されたディレクトリ内のすべてのELFファイルを変更し、異なるバージョンの GLIBC (libc.so.6) に適応させるためのELFユーティリティです。
-プロジェクトのコンセプトは ReferenceData/ModifiersSolym.c に基づいています（参考となるコメントがファイル内に含まれています）。
-
-**主な違い:**
-参照ファイル（固定バージョンを使用）とは異なり、このプロジェクトはより強力です：
-1. ユーザーが指定した libc.so.6 (引数1) から、サポートされているすべてのシンボルバージョンを自動的に解析します。
-2. ターゲットELFファイルまたはディレクトリ (引数2) が要求するシンボルバージョンの依存関係を自動的に修正（パッチ）し、提供された libc と互换性を持たせます。
-
-**使用方法:**
-
-```bash
-# ./[プログラム名] [ホストlibc.so.6のパス] [適応させたいELFファイルまたはディレクトリのパス]
-./your_program /path/to/your/libc.so.6 /path/to/target_elf_or_directory
-```
-
-# 警告：ABI互換性について
-
-- 本ツールは、ELFファイル内のシンボルバージョン・メタデータ（.gnu.version および .gnu.version_r セクション）を 変更するだけ です。
-- GLIBCのバージョン変更によって引き起こされる ABI (アプリケーション・バイナリ・インターフェース) の非互換性 については、一切チェックも修正も 行いません（行うこともできません）。
-- もし関数（例：memcpy や fopen）の動作、引数、またはその内部で使用されるデータ構造（struct）が新旧の libc バージョン間で異なる場合、たとえシンボルバージョンの「ダウングレード」に成功したとしても、プログラムは実行時にABIの不一致によりクラッシュ（セグメンテーション違反など）したり、不正なデータを生成したりする可能性が非常に高いです。
-- 本ツールは、使用者が新旧GLIBCバージョン間のABIが完全に互換であることを独自に確認済みであることを前提としています。ご自身が何をしているかを正確に理解している場合にのみ使用してください。
-
-**その他の注意事項とリスク**
-
-- シンボル依存: 適応が成功するための前提条件は、ターゲットELFが使用するすべてのシンボルが、指定された（通常は古いバージョンの）libc.so.6 に 物理的に存在する ことです。
-- エラーログ: 適応に失敗した場合、プログラムディレクトリ内のエラーログ (例: Errlog.txt) を確認してください。どのファイルのどのシンボルが原因で失敗したかが記録されています。
-- 安定性リスク: 特殊な構造を持つELFファイルの処理中、稀にセグメンテーション違反が発生する可能性があります。
-- ファイルのバックアップ: 本ツールはファイル操作に関するフォールトトレランス（mmap と msync を使用）を備えていますが、操作の低レベルな性質を考慮し、使用前に必ずすべてのターゲットELFファイルをバックアップする ことを強く推奨します。
