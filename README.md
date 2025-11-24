@@ -12,7 +12,7 @@
  #./[程序名] [宿主libc.so.6的路径] [要适配的ELF文件或目录路径]
  ./your_program /path/to/your/libc.so.6 /path/to/target_elf_or_directory
 ```
-#⚠️ 警告：关于ABI兼容性
+# 警告：关于ABI兼容性
 - 本项目 只修改 ELF 文件中的符号版本元数据（.gnu.version 和 .gnu.version_r 节区）。
 - 本项目 不会，也无法 检查或修复由于 GLIBC 版本变更引起的 ABI (应用程序二进制接口) 不兼容 问题。
 - 如果一个函数（例如 memcpy 或 fopen）在旧版本和新版本 libc 间的行为、参数、或其内部使用的数据结构（struct）发生了变化，那么即使符号版本被成功“降级”，程序在运行时也极有可能因ABI不匹配而崩溃（如段错误）或产生不可预期的错误数据。
@@ -25,7 +25,7 @@
 - 稳定性风险: 对于结构特殊的ELF文件，适配过程有小概率触发段错误。
 - 数据备份: 虽然程序对文件操作进行了容错处理（使用 mmap 和 msync），但鉴于此工具的底层修改特性，强烈建议在使用前备份所有目标ELF文件，以防万一。
 
-#GLIBC Symbol Version Adapter
+# GLIBC Symbol Version Adapter
 This project is an ELF utility designed to modify an ELF file, or all ELF files within a directory, to adapt them to a different version of GLIBC (libc.so.6).
 The project concept is based on ReferenceData/ModifiersSolym.c (which contains comments that may be useful for reference).
 
@@ -40,7 +40,7 @@ Unlike the reference file (which uses fixed, hard-coded versions), this project 
 ./your_program /path/to/your/libc.so.6 /path/to/target_elf_or_directory
 ```
 
-#⚠️ WARNING: ABI COMPATIBILITY
+# WARNING: ABI COMPATIBILITY
 
 - It does not, and cannot, check for or fix ABI (Application Binary Interface) incompatibilities caused by the GLIBC change.
 - This tool only modifies the symbol version metadata within the ELF file (the .gnu.version and .gnu.version_r sections).
@@ -54,7 +54,7 @@ Unlike the reference file (which uses fixed, hard-coded versions), this project 
 - Stability Risk: There is a small chance of a segmentation fault when processing certain complex or unusual ELF files.
 - BACKUP YOUR FILES: Although the tool has fault tolerance (using mmap and msync), given the low-level nature of this operation, it is strongly recommended to back up all target ELF files before use to prevent data loss.
 
-#GLIBC シンボルバージョン適応ツール
+# GLIBC シンボルバージョン適応ツール
 このプロジェクトは、ELFファイル、または指定されたディレクトリ内のすべてのELFファイルを変更し、異なるバージョンの GLIBC (libc.so.6) に適応させるためのELFユーティリティです。
 プロジェクトのコンセプトは ReferenceData/ModifiersSolym.c に基づいています（参考となるコメントがファイル内に含まれています）。
 
@@ -70,7 +70,7 @@ Unlike the reference file (which uses fixed, hard-coded versions), this project 
 ./your_program /path/to/your/libc.so.6 /path/to/target_elf_or_directory
 ```
 
-#⚠️ 警告：ABI互換性について
+# 警告：ABI互換性について
 
 - 本ツールは、ELFファイル内のシンボルバージョン・メタデータ（.gnu.version および .gnu.version_r セクション）を 変更するだけ です。
 - GLIBCのバージョン変更によって引き起こされる ABI (アプリケーション・バイナリ・インターフェース) の非互換性 については、一切チェックも修正も 行いません（行うこともできません）。
