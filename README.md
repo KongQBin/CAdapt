@@ -6,6 +6,9 @@
   &middot;
   <a href="./README_ja.md">日本語</a>
 </p>
+<p align="center">
+  <a href="https://hits.sh/github.com/KongQBin/CAdapt/"><img alt="Hits" src="https://hits.sh/github.com/KongQBin/CAdapt.svg?label=%E7%82%B9%E5%87%BB%E9%87%8F&color=007ec6"/></a>
+</p>
 
 # GLIBC 符号版本适配工具
 本项目是一个ELF工具，用于修改ELF文件或指定目录中的所有ELF文件，使其适应不同版本的 GLIBC (`libc.so.6`)。
