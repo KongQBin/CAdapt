@@ -8,6 +8,8 @@ include_directories(.)
 FILE(GLOB SRC_LIST
     "./*.h"
     "./*.cpp"
+    "./kmod/*.h"
+    "./kmod/*.cpp"
 )
 
 #set(CMAKE_BUILD_TYPE Debug)

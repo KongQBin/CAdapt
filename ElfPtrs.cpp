@@ -25,10 +25,10 @@ ElfPtrs::~ElfPtrs()
     }
 }
 
-int ElfPtrs::initPtrs(const char *path)
+int ElfPtrs::initPtrs(const std::string &path)
 {
     if(elf_hdr) return 0;
-    m_filePath = std::string(path);
+    m_filePath = path;
 
     int fd = -1;
     int openFlags = O_RDONLY;
@@ -41,7 +41,7 @@ int ElfPtrs::initPtrs(const char *path)
         mmapProt = PROT_READ | PROT_WRITE;
     }
 
-    fd = open(path, openFlags);
+    fd = open(path.c_str(), openFlags);
     if (0 > fd)
     {
         ErrorLog::getErrorLog()->putErrInfo("打开文件失败", m_filePath);

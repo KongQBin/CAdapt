@@ -27,11 +27,11 @@ struct SymbolPatchInfo
     int hostVersionId;
 };
 
-class GlibcOper
+class OperGlibc
 {
 public:
-    GlibcOper() = default;
-    ~GlibcOper() = default;
+    OperGlibc() = default;
+    ~OperGlibc() = default;
     void initGlibcInfo(const std::string& glibcPath);
     void showGlibcInfo(bool showDynsym = false) const;
     void adaptedTargets(const std::string& path);
