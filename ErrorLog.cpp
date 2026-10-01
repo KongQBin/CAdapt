@@ -1,17 +1,11 @@
 #include "ErrorLog.h"
+#include <linux/limits.h>
 #include <unistd.h>
 #include <cstring>
-#include <cstdio> // GetExePath 仍在使用C-Style API
+#include <cstdio>
 
-#ifndef __APPLE__
-    #include <linux/limits.h>
-#else
-    #ifndef PATH_MAX
-        #define PATH_MAX 4096
-    #endif
-    #include <libproc.h> // for proc_pidpath
-#endif
 
+using namespace std;
 ErrorLog *ErrorLog::getErrorLog()
 {
     static ErrorLog errLog;

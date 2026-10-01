@@ -1,19 +1,18 @@
 #pragma once
 #include <iostream>
 #include <string>
-#include <fstream> // C++98
-using namespace std;
+#include <fstream>
 
 class ErrorLog
 {
 public:
     static ErrorLog *getErrorLog();
-    ~ErrorLog() = default; // C++11
-    void putErrInfo(const string& err, const string& err2 = "");
+    ~ErrorLog() = default;
+    void putErrInfo(const std::string& err, const std::string& err2 = "");
 private:
     ErrorLog();
-    bool GetExePath(string& strPath, string &strProcessName);
+    bool GetExePath(std::string& strPath, std::string &strProcessName);
 
-    ofstream logFile; // C++98
+    std::ofstream logFile;
 };
 typedef ErrorLog* ErrorLogPtr;

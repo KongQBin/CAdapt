@@ -1,17 +1,24 @@
 #pragma once
 #include <elf.h>
+#include <cstddef>
 #include <sys/stat.h>
-#include <cstddef> // for size_t
-#ifndef __APPLE__
 #include <linux/limits.h>
-#else
-#ifndef PATH_MAX
-    #define PATH_MAX 4096
-#endif
-#endif
+#include <string>
+#include <map>
 #include "ErrorLog.h"
 
-// 使用 C++11 enum class
+// 统一的节表信息存储结构
+struct TableInfo
+{
+    bool inited;
+    int type;
+    std::string name;
+    Elf64_Shdr *addr;
+    unsigned long str;
+    char *strtab;
+};
+
+// 读写模式枚举
 enum class ElfOpenMode {
     ReadOnly,
     ReadWrite
@@ -20,29 +27,25 @@ enum class ElfOpenMode {
 class ElfPtrs
 {
 public:
-    // C++11 explicit
-    explicit ElfPtrs(ElfOpenMode mode); 
+    explicit ElfPtrs(ElfOpenMode mode, bool debug = false);
     ~ElfPtrs();
     int initPtrs(const char *path);
-    const char *getFilePath() const; 
+    const std::string getFilePath() const;
 
-    // C++11 成员初始化
-    Elf64_Ehdr *elf_hdr = nullptr;
-    Elf64_Shdr *sh = nullptr;
-    Elf64_Shdr *sh_str = nullptr;
-    char *strtab  = nullptr;
-    Elf64_Shdr *sh_dynsym = nullptr;
-    Elf64_Sym *dynsym = nullptr;
-    Elf64_Shdr *sh_dynstr = nullptr;
-    char *dynstr = nullptr;
-    Elf64_Shdr *sh_version = nullptr;
-    unsigned short *versions = nullptr;
-    Elf64_Shdr *sh_version_r = nullptr;
-    Elf64_Verneed *verneed = nullptr;
-    Elf64_Shdr *sh_version_d = nullptr;
-    Elf64_Verdef *verdef = nullptr;
+    // 获取对应的 TableInfo
+    TableInfo* getTableInfo(const std::string& name);
+
+    Elf64_Ehdr *elf_hdr         = nullptr;  // 文件头
+    Elf64_Shdr *sh              = nullptr;  // 节头表
+    Elf64_Shdr *sh_str          = nullptr;  // 节头字符串表
+    char *strtab                = nullptr;
+
 private:
-    char filePath[PATH_MAX] = { 0 };
-    struct stat st;
-    ElfOpenMode mode;
+    ElfOpenMode m_mode = ElfOpenMode::ReadOnly;
+    std::string m_filePath = "";
+    struct stat m_st = { 0 };
+    bool m_debug = false;
+
+    // 全面采用 map 统一存储所有的 TableInfo
+    std::map<std::string, TableInfo> m_tbinfo;
 };

@@ -1,12 +1,16 @@
-#该工具用来对Elf文件符号表与LIBC库中的符号表做适配
-#前提是目标Elf文件中没有用到目标LIBC库中不存在的符号
-project(CAdapt)
+# 该工具用来对Elf文件符号表、CRC等进行魔改适配
+# 用于在特性场景下已编译的可执行程序、动态库、驱动不兼容问题
+# ！！！！！！！！！！非专业人员谨慎使用！！！！！！！！！！
+project(cadapt)
 cmake_minimum_required(VERSION 2.8)
+
 include_directories(.)
 FILE(GLOB SRC_LIST
     "./*.h"
     "./*.cpp"
 )
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}  -static-libgcc -static-libstdc++")
+
+#set(CMAKE_BUILD_TYPE Debug)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=gnu++11  -static-libgcc -static-libstdc++")
+
 add_executable(${PROJECT_NAME} ${SRC_LIST})

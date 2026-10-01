@@ -1,66 +1,60 @@
 #pragma once
 #include <iostream>
 #include <string>
-#include <utility> // for pair
+#include <utility>
 #include <vector>
-#include <memory>  // C++11 for unique_ptr
+#include <memory>
 #include "ElfPtrs.h"
 
-// C++98/11 struct
 struct GlibcVersionInfo
 {
-    string name;
+    std::string name;
     int id;
-    vector<string> symbols;
+    std::vector<std::string> symbols;
 };
 
-// C++98/11 struct
 struct TargetVersionInfo
 {
-    string name;
+    std::string name;
     int id;
 };
 
-// C++98/11 struct
 struct SymbolPatchInfo
 {
-    int symbolIndex; 
+    int symbolIndex;
     int originalTargetVersionIndex;
-    string hostVersionName;
-    int hostVersionId; 
+    std::string hostVersionName;
+    int hostVersionId;
 };
-
 
 class GlibcOper
 {
 public:
-    GlibcOper() = default; // C++11
-    ~GlibcOper() = default; // C++11 (unique_ptr 会自动处理)
-    void initGlibcInfo(const string& glibcPath);
-    void showGlibcInfo(bool showDynsym = false) const; 
-    void adaptedTargets(const string& path);
+    GlibcOper() = default;
+    ~GlibcOper() = default;
+    void initGlibcInfo(const std::string& glibcPath);
+    void showGlibcInfo(bool showDynsym = false) const;
+    void adaptedTargets(const std::string& path);
     void clearContainer();
 
 private:
-    // 还原为 C-Style (C++11 兼容)
-    void getAllElf(const char *dir); 
+    void getAllElf(const char *dir);
     bool isElf(const char *file) const;
-    
-    bool adaptedTargetElfFileGlibcVersion(const string& path);
-    bool checkFoundDynsym(); // 修正拼写
 
-    pair<string, int> containsVersion(const string& version) const;
-    pair<string, int> containsDynsym(const string& dynsym) const;
+    bool adaptedTargetElfFileGlibcVersion(const std::string& path);
+    bool checkFoundDynsym();
 
-    // C++11 智能指针
-    unique_ptr<ElfPtrs> glibcPtrs;
-    unique_ptr<ElfPtrs> targetElfPtrs;
-    
-    Elf64_Verneed *targetElfLibcVerneed = nullptr; // C++11
+    std::pair<std::string, int> containsVersion(const std::string& version) const;
+    std::pair<std::string, int> containsDynsym(const std::string& dynsym) const;
+
+    std::unique_ptr<ElfPtrs> glibcPtrs;
+    std::unique_ptr<ElfPtrs> targetElfPtrs;
+
+    Elf64_Verneed *targetElfLibcVerneed = nullptr;
     int targetMaxPathLen = 0;
-    
-    vector<string> targetElf_vct;
-    vector<TargetVersionInfo> targetVersionInfo_vct;
-    vector<SymbolPatchInfo> validIndexAndId_vct;
-    vector<GlibcVersionInfo> glibcVersionInfo_vct;
+
+    std::vector<std::string> targetElf_vct;
+    std::vector<TargetVersionInfo> targetVersionInfo_vct;
+    std::vector<SymbolPatchInfo> validIndexAndId_vct;
+    std::vector<GlibcVersionInfo> glibcVersionInfo_vct;
 };
