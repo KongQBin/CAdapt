@@ -4,35 +4,9 @@
 #include <getopt.h>
 #include "OperGlibc.h"
 #include "OperKmod.h"
+#include "help.hpp"
 
 using namespace std;
-
-/**
- * @brief 打印帮助信息
- * @param prog_name 程序名 (argv[0])
- */
-void print_help(const char* prog_name)
-{
-    cout << "------------------------->Help Info<-------------------------" << endl;
-    cout << "Usage: " << prog_name << " [Options]" << endl;
-    cout << endl;
-    cout << "【GLIBC 适配选项】" << endl;
-    cout << "  -c, --libc <path>     必需。指定提供符号表的GLIBC(libc.so.6)文件位置。" << endl;
-    cout << "  -t, --target <path>   必需。指定要适配GLIBC版本及符号表的ELF文件/所在目录。" << endl;
-    cout << endl;
-    cout << "【内核模块(ko) 适配选项】" << endl;
-    cout << "  -m, --kmod <path>     必需。指定要修改的内核模块(.ko)文件位置。" << endl;
-    cout << "  -s, --symvers <path>  可选。指定内核符号版本文件(Module.symvers)的位置。若不指定，将从当前运行系统中提取。" << endl;
-    cout << "  -v, --vermagic <str>  可选。指定要修改的目标版本魔术(vermagic)字符串。若不指定，将从当前运行系统中提取。" << endl;
-    cout << endl;
-    cout << "【通用选项】" << endl;
-    cout << "  -h, --help            显示此帮助信息。" << endl;
-    cout << endl;
-    cout << "Example:" << endl;
-    cout << "  GLIBC适配: " << prog_name << " -c /lib64/libc.so.6 -t ./my_program" << endl;
-    cout << "  KMOD适配:  " << prog_name << " -m ./my_driver.ko -s ./Module.symvers -v \"4.18.0-193.el8.x86_64 SMP mod_unload\"" << endl;
-}
-
 int main(int argc, char **argv)
 {
     string libc_path;
@@ -78,7 +52,7 @@ int main(int argc, char **argv)
         case 'v':
             vermagic_str = optarg;
             break;
-        default: // '?' 表示无法识别的选项或缺少参数
+        default:
             show_help = true;
             break;
         }
@@ -116,7 +90,7 @@ int main(int argc, char **argv)
     }
 
 
-    // 核心业务分发执行
+    // 核心业务分发
     // ================== GLIBC 符号适配 ==================
     if (run_glibc) {
         cout << "============== GLIBC 适配 ==============" << endl;
