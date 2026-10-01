@@ -1,7 +1,7 @@
 #include <iostream>
 #include <cstring>
-#include <string>     // 包含 std::string
-#include <getopt.h>   // 包含 getopt_long
+#include <string>
+#include <getopt.h>
 #include "GlibcOper.h"
 
 using namespace std;
@@ -47,7 +47,7 @@ int main(int argc, char **argv)
     // h - 无参数
     // l: - 有必需参数
     // t: - 有必需参数
-    while ((opt = getopt_long(argc, argv, "hl:t:", long_options, &option_index)) != -1)
+    while ((opt = getopt_long(argc, argv, "hc:t:", long_options, &option_index)) != -1)
     {
         switch (opt) {
             case 'h':

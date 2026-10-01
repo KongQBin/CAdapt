@@ -9,6 +9,8 @@
 #include <set>
 #include <utility>
 
+using namespace std;
+
 void GlibcOper::initGlibcInfo(const string& glibcPath)
 {
     if(glibcPtrs) return;
@@ -24,7 +26,25 @@ void GlibcOper::initGlibcInfo(const string& glibcPath)
         return;
     }
 
-    Elf64_Verdef *verdef = glibcPtrs->verdef;
+    // 获取必需的表信息
+    TableInfo *tb_version_d = glibcPtrs->getTableInfo(".gnu.version_d");
+    TableInfo *tb_dynstr = glibcPtrs->getTableInfo(".dynstr");
+    TableInfo *tb_dynsym = glibcPtrs->getTableInfo(".dynsym");
+    TableInfo *tb_version = glibcPtrs->getTableInfo(".gnu.version");
+
+    if(!tb_version_d || !tb_dynstr || !tb_dynsym || !tb_version)
+    {
+        ErrorLog::getErrorLog()->putErrInfo("获取Glibc必要节区失败", glibcPath);
+        return;
+    }
+
+    // 计算实际偏移
+    char* ehdr = reinterpret_cast<char*>(glibcPtrs->elf_hdr);
+    Elf64_Verdef *verdef = reinterpret_cast<Elf64_Verdef*>(ehdr + tb_version_d->addr->sh_offset);
+    char *dynstr = ehdr + tb_dynstr->addr->sh_offset;
+    Elf64_Sym *dynsym = reinterpret_cast<Elf64_Sym*>(ehdr + tb_dynsym->addr->sh_offset);
+    unsigned short *versions = reinterpret_cast<unsigned short*>(ehdr + tb_version->addr->sh_offset);
+
     Elf64_Verdef *next_verdef;
     set<string> seenVersions;
 
@@ -37,7 +57,7 @@ void GlibcOper::initGlibcInfo(const string& glibcPath)
 
             for (int cnt = verdef->vd_aux; cnt--; daux = next_daux)
             {
-                char *name = glibcPtrs->dynstr + daux->vda_name;
+                char *name = dynstr + daux->vda_name;
 
                 if(seenVersions.find(name) == seenVersions.end())
                 {
@@ -46,13 +66,13 @@ void GlibcOper::initGlibcInfo(const string& glibcPath)
                     versionInfo.name = name;
                     versionInfo.id = verdef->vd_ndx;
 
-                    for (int i = 1; i < glibcPtrs->sh_version->sh_size / sizeof(unsigned short); i++)
+                    for (size_t i = 1; i < tb_version->addr->sh_size / sizeof(unsigned short); i++)
                     {
-                        if(glibcPtrs->versions[i] == verdef->vd_ndx)
+                        if(versions[i] == verdef->vd_ndx)
                         {
-                            string dynsym = string(glibcPtrs->dynstr + glibcPtrs->dynsym[i].st_name);
-                            if(dynsym != name)
-                                versionInfo.symbols.push_back(move(dynsym));
+                            string s_dynsym = string(dynstr + dynsym[i].st_name);
+                            if(s_dynsym != name)
+                                versionInfo.symbols.push_back(move(s_dynsym));
                         }
                     }
                     glibcVersionInfo_vct.push_back(move(versionInfo));
@@ -106,7 +126,7 @@ void GlibcOper::adaptedTargets(const string& path)
 
         for(const auto& str : targetElf_vct)
         {
-            if(str.size() > targetMaxPathLen) targetMaxPathLen = str.size() + 4;
+            if(str.size() > (size_t)targetMaxPathLen) targetMaxPathLen = str.size() + 4;
         }
 
         for(const auto& str : targetElf_vct)
@@ -189,93 +209,82 @@ bool GlibcOper::adaptedTargetElfFileGlibcVersion(const string& path)
 
     if(!checkFoundDynsym()) return false;
 
-    // 不再使用 memmove，因为它会破坏文件偏移和节区大小。
-    // 相反，通过修改 Elf64_Vernaux 链表指针 (vna_next)
-    // 和 Elf64_Verneed 的起始指针 (vn_aux) 来 "跳过" (Bypass)
-    // 不需要的数据块。数据块本身保留在文件中，但动态链接器
-    // 将不再访问它们，这样文件结构保持一致。
-
     unsigned removed_count = 0;
     unsigned original_cnt = 0;
 
-    // 确保 targetElfLibcVerneed 是有效的
     if (targetElfLibcVerneed)
     {
-        original_cnt = targetElfLibcVerneed->vn_cnt; // 保存原始计数值
+        original_cnt = targetElfLibcVerneed->vn_cnt;
     }
 
-    // 检查 targetElfLibcVerneed 是否有效，以及它是否有条目
+    TableInfo* tb_dynstr = targetElfPtrs->getTableInfo(".dynstr");
+    char* target_dynstr = tb_dynstr ? (reinterpret_cast<char*>(targetElfPtrs->elf_hdr) + tb_dynstr->addr->sh_offset) : nullptr;
+
+    if(!target_dynstr) return false;
+
     if (targetElfLibcVerneed && original_cnt > 0 && targetElfLibcVerneed->vn_aux != 0)
     {
         Elf64_Vernaux *naux = reinterpret_cast<Elf64_Vernaux *>((char *)targetElfLibcVerneed + targetElfLibcVerneed->vn_aux);
-        Elf64_Vernaux *prev_naux = nullptr; // 跟踪前一个保留的条目
+        Elf64_Vernaux *prev_naux = nullptr;
 
-        // 遍历所有原始条目
         for (unsigned cnt = 0; cnt < original_cnt; ++cnt)
         {
-            char *name = targetElfPtrs->dynstr + naux->vna_name;
+            char *name = target_dynstr + naux->vna_name;
 
-            // 必须在修改 *之前* 获取下一个条目的指针
             Elf64_Vernaux *next_naux = nullptr;
             if (naux->vna_next != 0)
                 next_naux = reinterpret_cast<Elf64_Vernaux*>((char *)naux + naux->vna_next);
 
-            if(containsVersion(name).second == -1) // Glibc库没有这个版本 -> 移除
+            if(containsVersion(name).second == -1)
             {
                 removed_count++;
                 if (prev_naux)
                 {
-                    // [情况A: 移除中间或末尾的条目]
-                    // 将前一个条目的 'next' 指针指向当前条目的 'next' 指针，
-                    // 从而在链表中 "跳过" 当前条目。
                     prev_naux->vna_next = naux->vna_next;
                 }
                 else
                 {
-                    // [情况B: 移除第一个条目]
-                    // 我们必须更新 Elf64_Verneed 结构中的 vn_aux (起始偏移)
-                    // 使其指向 *下一个* 条目。
                     if (next_naux)
                     {
-                        // 新的起始偏移是 'next_naux' 相对于 'targetElfLibcVerneed' 的偏移
                         targetElfLibcVerneed->vn_aux = (char*)next_naux - (char*)targetElfLibcVerneed;
                     }
                     else
                     {
-                        // 我们移除了唯一的条目。起始偏移置为0。
                         targetElfLibcVerneed->vn_aux = 0;
                     }
                 }
-                // 'prev_naux' 保持不变，因为它仍然是上一个 *被保留* 的条目。
             }
-            else // Glibc库有这个版本 -> 保留
+            else
             {
-                // [情况C: 保留条目]
-                // 此条目被保留，它成为下一次迭代的 "前一个条目"。
                 prev_naux = naux;
             }
 
-            naux = next_naux; // 总是移动到下一个条目
-            if (naux == nullptr) break; // 已到达链表末尾
+            naux = next_naux;
+            if (naux == nullptr) break;
         }
     }
     else if (targetElfLibcVerneed)
     {
-        // 确保没有条目时计数器为0
         targetElfLibcVerneed->vn_cnt = 0;
     }
 
-    // 循环结束后，更新 vn_cnt 计数器
     if (targetElfLibcVerneed && removed_count > 0)
     {
         targetElfLibcVerneed->vn_cnt -= removed_count;
     }
 
+    TableInfo* tb_version = targetElfPtrs->getTableInfo(".gnu.version");
+    TableInfo* tb_dynsym = targetElfPtrs->getTableInfo(".dynsym");
+
+    char* target_ehdr = reinterpret_cast<char*>(targetElfPtrs->elf_hdr);
+    unsigned short *target_versions = reinterpret_cast<unsigned short*>(target_ehdr + tb_version->addr->sh_offset);
+    Elf64_Sym *target_dynsym = reinterpret_cast<Elf64_Sym*>(target_ehdr + tb_dynsym->addr->sh_offset);
+
     for(const auto& patch : validIndexAndId_vct)
     {
         if(targetVersionInfo_vct[patch.originalTargetVersionIndex].id != patch.hostVersionId)
         {
-            const char* dynsymName = targetElfPtrs->dynstr + targetElfPtrs->dynsym[patch.symbolIndex].st_name;
+            const char* dynsymName = target_dynstr + target_dynsym[patch.symbolIndex].st_name;
 
             printf("  修改 %-20s: %-12s(%02u) ----> %-12s(%02u)  文件:%-20s\n",
                    dynsymName,
@@ -285,7 +294,7 @@ bool GlibcOper::adaptedTargetElfFileGlibcVersion(const string& path)
                    (unsigned short)patch.hostVersionId,
                    path.c_str());
 
-            targetElfPtrs->versions[patch.symbolIndex] = patch.hostVersionId;
+            target_versions[patch.symbolIndex] = patch.hostVersionId;
         }
     }
     return true;
@@ -295,18 +304,27 @@ bool GlibcOper::checkFoundDynsym()
 {
     bool ret = true;
     targetElfLibcVerneed = nullptr;
-    Elf64_Verneed *verneed = targetElfPtrs->verneed;
 
-    // 健壮性检查: 确保 verneed 不是 nullptr
-    if (!verneed)
+    TableInfo* tb_version_r = targetElfPtrs->getTableInfo(".gnu.version_r");
+    TableInfo* tb_dynstr = targetElfPtrs->getTableInfo(".dynstr");
+    TableInfo* tb_version = targetElfPtrs->getTableInfo(".gnu.version");
+    TableInfo* tb_dynsym = targetElfPtrs->getTableInfo(".dynsym");
+
+    if(!tb_version_r || !tb_dynstr || !tb_version || !tb_dynsym)
     {
-        ErrorLog::getErrorLog()->putErrInfo("未能找到 .gnu.version_r 节区或内容为空", targetElfPtrs->getFilePath());
+        ErrorLog::getErrorLog()->putErrInfo("目标ELF缺少必要节区", targetElfPtrs->getFilePath());
         return false;
     }
 
+    char* ehdr = reinterpret_cast<char*>(targetElfPtrs->elf_hdr);
+    Elf64_Verneed *verneed = reinterpret_cast<Elf64_Verneed*>(ehdr + tb_version_r->addr->sh_offset);
+    char *dynstr = ehdr + tb_dynstr->addr->sh_offset;
+    unsigned short *versions = reinterpret_cast<unsigned short*>(ehdr + tb_version->addr->sh_offset);
+    Elf64_Sym *dynsym = reinterpret_cast<Elf64_Sym*>(ehdr + tb_dynsym->addr->sh_offset);
+
     while(true)
     {
-        if(strcmp(targetElfPtrs->dynstr + verneed->vn_file, "libc.so.6"))
+        if(strcmp(dynstr + verneed->vn_file, "libc.so.6"))
         {
             if(verneed->vn_next == 0) break;
             verneed = reinterpret_cast<Elf64_Verneed*>((char *)verneed + verneed->vn_next);
@@ -315,13 +333,12 @@ bool GlibcOper::checkFoundDynsym()
 
         targetElfLibcVerneed = verneed;
 
-        // 健壮性检查: 确保 vn_aux 是有效的偏移
         if (verneed->vn_cnt > 0 && verneed->vn_aux != 0)
         {
             Elf64_Vernaux *naux = reinterpret_cast<Elf64_Vernaux*>((char *)verneed + verneed->vn_aux);
             while(true)
             {
-                char *name = targetElfPtrs->dynstr + naux->vna_name;
+                char *name = dynstr + naux->vna_name;
                 targetVersionInfo_vct.push_back({string(name), naux->vna_other});
 
                 if(naux->vna_next == 0) break;
@@ -336,15 +353,15 @@ bool GlibcOper::checkFoundDynsym()
         return false;
     }
 
-    for (int i = 1; i < targetElfPtrs->sh_version->sh_size / sizeof(unsigned short); i++)
+    for (size_t i = 1; i < tb_version->addr->sh_size / sizeof(unsigned short); i++)
     {
-        unsigned short v = targetElfPtrs->versions[i];
+        unsigned short v = versions[i];
         unsigned hveridx = 0;
         for (; hveridx < targetVersionInfo_vct.size(); ++hveridx)
             if (v == targetVersionInfo_vct[hveridx].id) break;
         if (hveridx == targetVersionInfo_vct.size()) continue;
 
-        const char* dynsymName = targetElfPtrs->dynstr + targetElfPtrs->dynsym[i].st_name;
+        const char* dynsymName = dynstr + dynsym[i].st_name;
         auto verAndId = containsDynsym(string(dynsymName));
         if(verAndId.second == -1)
         {
@@ -367,7 +384,7 @@ bool GlibcOper::checkFoundDynsym()
 
             if(hostIdInTarget != -1)
             {
-                validIndexAndId_vct.push_back({i, (int)hveridx, verAndId.first, hostIdInTarget});
+                validIndexAndId_vct.push_back({(int)i, (int)hveridx, verAndId.first, hostIdInTarget});
             }
             else
             {
