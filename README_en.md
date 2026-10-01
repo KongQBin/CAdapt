@@ -1,38 +1,37 @@
 <p align="center">
-  <a href="./README_en.md">English</a>
+  <a href="./README_en.md">EN</a>
   &middot;
   <a href="./README.md">简/</a>
-  <a href="./README_zh-Hant.md">繁體中文</a>
+  <a href="./README_zh-Hant.md">繁</a>
   &middot;
-  <a href="./README_ja.md">日本語</a>
+  <a href="./README_ja.md">日</a>
 </p>
 
-# GLIBC Symbol Version Adapter
-This project is an ELF utility designed to modify an ELF file, or all ELF files within a directory, to adapt them to a different version of GLIBC (libc.so.6).
-The project concept is based on ReferenceData/ModifiersSolym.c (which contains comments that may be useful for reference).
+# GLIBC & KMOD Symbol Version Adapter (CAdapt)
 
-**Key Difference:**
-Unlike the reference file (which uses fixed, hard-coded versions), this project is more powerful:
-1. It automatically parses all supported symbol versions from a user-provided libc.so.6 (argument 1).
-2. It automatically patches the symbol version dependencies in the target ELF file or directory (argument 2) to be compatible with the provided libc.
+This project is a low-level ELF/Kernel Module patching utility designed to resolve issues where compiled executables, dynamic libraries, or kernel drivers fail to run or load due to system version mismatches in specific scenarios.
+
+The project supports two core features:
+1. **GLIBC Adaptation**: Automatically parses supported symbol versions from a provided `libc.so.6` and patches the symbol version dependencies in the target ELF file (or directory) to be compatible.
+2. **KMOD Adaptation**: Modifies the `vermagic` and kernel symbol CRC checksums of Linux Kernel Modules (`.ko`), bypassing kernel load checks and allowing them to be forced-loaded into kernels with mismatched versions.
 
 **Usage:**
 ```bash
-#./[program_name] [path/to/host/libc.so.6] [path/to/target_elf_or_directory]
-./your_program /path/to/your/libc.so.6 /path/to/target_elf_or_directory
+# [GLIBC Adaptation Mode]
+# ./[program] -c [path/to/host/libc.so.6] -t [path/to/target_elf_or_directory]
+./cadapt -c /path/to/your/libc.so.6 -t /path/to/target_elf_or_directory
+
+# [KMOD Adaptation Mode]
+# ./[program] -m [target .ko file] -s [optional: path to Module.symvers] -v [optional: target vermagic string]
+./cadapt -m ./my_driver.ko -s ./Module.symvers -v "4.18.0-193.el8.x86_64 SMP mod_unload"
+# Note: If -s or -v are omitted, the program will attempt to extract the CRC and vermagic information from the currently running system.
 ```
 
-# WARNING: ABI COMPATIBILITY
+# ⚠️ WARNING: ABI Compatibility & Kernel Panic Risks
+- Metadata Modification Only: This tool only modifies symbol version metadata (e.g., .gnu.version sections or symbol CRC checksums). It does not, and cannot, check for or fix ABI (Application Binary Interface) incompatibilities.
 
-- It does not, and cannot, check for or fix ABI (Application Binary Interface) incompatibilities caused by the GLIBC change.
-- This tool only modifies the symbol version metadata within the ELF file (the .gnu.version and .gnu.version_r sections).
-- If a function (e.g., memcpy or fopen) has different behavior, parameters, or internal data structures (struct) between the old and new libc versions, the program will very likely crash (e.g., Segmentation Fault) or produce corrupt data at runtime, even if the symbol version was "downgraded" successfully.
-- This tool assumes YOU have independently verified that the ABIs between the old and new GLIBC versions are fully compatible. Use only if you know exactly what you are doing.
+- GLIBC Crash Risk: If a function (e.g., memcpy or fopen) has different behavior, parameters, or internal data structures between libc versions, the program is highly likely to crash (e.g., Segmentation Fault) or produce corrupt data at runtime.
 
-**Other Disclaimers and Risks**
+- KMOD Crash Risk (Kernel Panic): Forcing CRC and vermagic modifications bypasses the kernel's safety checks. If exported kernel symbols (e.g., core struct layouts) have changed, forcing the module to load will directly result in a Kernel Panic / Oops.
 
-- Symbol Dependency: Successful adaptation requires that all symbols used by the target ELF must physically exist in the provided (usually older) libc.so.6.
-- Error Log: If adaptation fails, check the error log (e.g., Errlog.txt) in the program's directory. The log will specify which file and which symbol caused the failure.
-- Stability Risk: There is a small chance of a segmentation fault when processing certain complex or unusual ELF files.
-- BACKUP YOUR FILES: Although the tool has fault tolerance (using mmap and msync), given the low-level nature of this operation, it is strongly recommended to back up all target ELF files before use to prevent data loss.
-
+- This tool assumes YOU have independently verified that the ABIs between the two environments are fully compatible. Use only if you know exactly what you are doing, and ALWAYS BACKUP your files before operation.
