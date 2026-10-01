@@ -8,6 +8,7 @@ include_directories(.)
 FILE(GLOB SRC_LIST
     "./*.h"
     "./*.cpp"
+    "./*.hpp"
     "./kmod/*.h"
     "./kmod/*.cpp"
 )
