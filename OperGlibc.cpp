@@ -1,4 +1,4 @@
-#include "GlibcOper.h"
+#include "OperGlibc.h"
 #include <string.h>
 #include <stdio.h>
 #include <sys/types.h>
@@ -11,7 +11,7 @@
 
 using namespace std;
 
-void GlibcOper::initGlibcInfo(const string& glibcPath)
+void OperGlibc::initGlibcInfo(const string& glibcPath)
 {
     if(glibcPtrs) return;
     glibcPtrs.reset(new ElfPtrs(ElfOpenMode::ReadOnly));
@@ -86,7 +86,7 @@ void GlibcOper::initGlibcInfo(const string& glibcPath)
     showGlibcInfo();
 }
 
-void GlibcOper::showGlibcInfo(bool showDynsym) const
+void OperGlibc::showGlibcInfo(bool showDynsym) const
 {
     const char* reset = "\033[0m";
     const char* bold = "\033[1m";
@@ -115,7 +115,7 @@ void GlibcOper::showGlibcInfo(bool showDynsym) const
     }
 }
 
-void GlibcOper::adaptedTargets(const string& path)
+void OperGlibc::adaptedTargets(const string& path)
 {
     DIR *dir = opendir(path.c_str());
     targetMaxPathLen = path.size() + 4;
@@ -139,14 +139,14 @@ void GlibcOper::adaptedTargets(const string& path)
     return;
 }
 
-void GlibcOper::clearContainer()
+void OperGlibc::clearContainer()
 {
     targetElfPtrs.reset();
     targetVersionInfo_vct.clear();
     validIndexAndId_vct.clear();
 }
 
-void GlibcOper::getAllElf(const char *dir)
+void OperGlibc::getAllElf(const char *dir)
 {
     DIR *d;
     struct dirent *file;
@@ -174,7 +174,7 @@ void GlibcOper::getAllElf(const char *dir)
     return;
 }
 
-bool GlibcOper::isElf(const char *file) const
+bool OperGlibc::isElf(const char *file) const
 {
     bool ret = false;
     const char elfHead[7] = {0x7f,0x45,0x4c,0x46,0x02,0x01,0x01};
@@ -190,7 +190,7 @@ bool GlibcOper::isElf(const char *file) const
     return ret;
 }
 
-bool GlibcOper::adaptedTargetElfFileGlibcVersion(const string& path)
+bool OperGlibc::adaptedTargetElfFileGlibcVersion(const string& path)
 {
     clearContainer();
     if(glibcVersionInfo_vct.empty()) return false;
@@ -300,7 +300,7 @@ bool GlibcOper::adaptedTargetElfFileGlibcVersion(const string& path)
     return true;
 }
 
-bool GlibcOper::checkFoundDynsym()
+bool OperGlibc::checkFoundDynsym()
 {
     bool ret = true;
     targetElfLibcVerneed = nullptr;
@@ -396,7 +396,7 @@ bool GlibcOper::checkFoundDynsym()
     return true;
 }
 
-pair<string, int> GlibcOper::containsVersion(const string& version) const
+pair<string, int> OperGlibc::containsVersion(const string& version) const
 {
     for (const auto& ver : glibcVersionInfo_vct)
     {
@@ -406,7 +406,7 @@ pair<string, int> GlibcOper::containsVersion(const string& version) const
     return {"", -1};
 }
 
-pair<string, int> GlibcOper::containsDynsym(const string& dynsym) const
+pair<string, int> OperGlibc::containsDynsym(const string& dynsym) const
 {
     for (const auto& ver : glibcVersionInfo_vct)
     {

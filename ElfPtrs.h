@@ -29,7 +29,7 @@ class ElfPtrs
 public:
     explicit ElfPtrs(ElfOpenMode mode, bool debug = false);
     ~ElfPtrs();
-    int initPtrs(const char *path);
+    int initPtrs(const std::string &path);
     const std::string getFilePath() const;
 
     // 获取对应的 TableInfo
