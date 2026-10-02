@@ -5,12 +5,15 @@ project(cadapt)
 cmake_minimum_required(VERSION 2.8)
 
 include_directories(.)
+include_directories(./common)
 FILE(GLOB SRC_LIST
     "./*.h"
     "./*.cpp"
     "./*.hpp"
     "./kmod/*.h"
     "./kmod/*.cpp"
+    "./common/*.h"
+    "./common/*.cpp"
 )
 
 #set(CMAKE_BUILD_TYPE Debug)
