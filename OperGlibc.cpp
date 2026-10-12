@@ -51,12 +51,13 @@ void OperGlibc::initGlibcInfo(const string& glibcPath)
 
     for (int last = 0; !last; verdef = next_verdef)
     {
-        if(verdef->vd_flags == 0)
+        if(!(verdef->vd_flags & VER_FLG_BASE))
         {
             Elf64_Verdaux *daux = reinterpret_cast<Elf64_Verdaux*>((char *)verdef + verdef->vd_aux);
             Elf64_Verdaux *next_daux;
 
-            for (unsigned cnt = verdef->vd_cnt; cnt--; daux = next_daux)
+            // 首个辅助项是版本名，其余辅助项为父版本，不应创建新的符号归属。
+            for (unsigned cnt = 1; cnt--; daux = next_daux)
             {
                 char *name = dynstr + daux->vda_name;
 
@@ -69,7 +70,7 @@ void OperGlibc::initGlibcInfo(const string& glibcPath)
 
                     for (size_t i = 1; i < tb_version->addr->sh_size / sizeof(unsigned short); i++)
                     {
-                        if((versions[i] & 0x7fff) == verdef->vd_ndx)
+                        if((versions[i] & 0x7fff) == verdef->vd_ndx && dynsym[i].st_shndx != SHN_UNDEF)
                         {
                             string s_dynsym = string(dynstr + dynsym[i].st_name);
                             if(s_dynsym != name)
@@ -83,6 +84,12 @@ void OperGlibc::initGlibcInfo(const string& glibcPath)
         }
         next_verdef = reinterpret_cast<Elf64_Verdef*>((char *)verdef + verdef->vd_next);
         last = verdef->vd_next == 0;
+    }
+    for (const auto& version : glibcVersionInfo_vct)
+    {
+        versionIds[version.name] = version.id;
+        for (const auto& symbol : version.symbols)
+            symbolVersions[symbol].push_back({version.name, version.id});
     }
     showGlibcInfo();
 }
@@ -442,32 +449,22 @@ bool OperGlibc::checkFoundDynsym()
 
 pair<string, int> OperGlibc::containsVersion(const string& version) const
 {
-    for (const auto& ver : glibcVersionInfo_vct)
-    {
-        if(ver.name == version)
-            return {ver.name, ver.id};
-    }
+    auto it = versionIds.find(version);
+    if (it != versionIds.end()) return {it->first, it->second};
     return {"", -1};
 }
 
 pair<string, int> OperGlibc::containsDynsym(const string& dynsym, const string& preferredVersion) const
 {
-    pair<string, int> first = {"", -1};
+    auto found = symbolVersions.find(dynsym);
+    if (found == symbolVersions.end()) return {"", -1};
     pair<string, int> available = {"", -1};
-    for (const auto& ver : glibcVersionInfo_vct)
+    for (const auto& version : found->second)
     {
-        for (const auto& str : ver.symbols)
-        {
-            if(str == dynsym)
-            {
-                if (ver.name == preferredVersion) return {ver.name, ver.id};
-                if (first.second == -1) first = {ver.name, ver.id};
-                if (available.second == -1)
-                    for (const auto& target : targetVersionInfo_vct)
-                        if (target.name == ver.name) { available = {ver.name, ver.id}; break; }
-                break;
-            }
-        }
+        if (version.first == preferredVersion) return version;
+        if (available.second == -1)
+            for (const auto& target : targetVersionInfo_vct)
+                if (target.name == version.first) { available = version; break; }
     }
-    return available.second != -1 ? available : first;
+    return available.second != -1 ? available : found->second.front();
 }
