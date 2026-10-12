@@ -48,7 +48,7 @@ with tempfile.TemporaryDirectory(prefix="cadapt-glibc-test-") as directory:
         return output
 
     def run(path, succeeds, unchanged=False, libc=host):
-        files = list(path.glob("*.so")) if path.is_dir() else [path]
+        files = [file for file in path.rglob("*.so") if not file.is_symlink()] if path.is_dir() else [path]
         before = {file: file.read_bytes() for file in files}
         result = subprocess.run(
             [str(binary), "-c", str(libc), "-t", str(path)],
@@ -166,3 +166,51 @@ with tempfile.TemporaryDirectory(prefix="cadapt-glibc-test-") as directory:
                 seen.add(name)
         assert seen == set(expected)
         assert len(patched) == len(data)
+
+    def mark_hidden(file, symbol):
+        data = bytearray(file.read_bytes())
+        tables = sections(data)
+        dynsym = tables[".dynsym"]
+        strings = tables[".dynstr"][4]
+        for i in range(dynsym[5] // dynsym[9]):
+            name_offset = struct.unpack_from("<I", data, dynsym[4] + i * dynsym[9])[0]
+            start = strings + name_offset
+            if data[start:data.index(0, start)].decode() == symbol:
+                offset = tables[".gnu.version"][4] + i * 2
+                version = struct.unpack_from("<H", data, offset)[0]
+                struct.pack_into("<H", data, offset, version | 0x8000)
+                file.write_bytes(data)
+                return offset
+        raise AssertionError("missing symbol " + symbol)
+
+    hidden_host = root / "hidden-libc.so.6"
+    shutil.copy2(host, hidden_host)
+    mark_hidden(hidden_host, "foo")
+    hidden = target("hidden-symbol", ["anchor", "foo"])
+    version_offset = mark_hidden(hidden, "foo")
+    run(hidden, True, libc=hidden_host)
+    data = hidden.read_bytes()
+    version = struct.unpack_from("<H", data, version_offset)[0]
+    assert version & 0x8000, "hidden marker was lost"
+    _, nodes = libc_requirements(data)
+    ids = {record[2] & 0x7FFF: name for _, name, record in nodes}
+    assert ids[version & 0x7FFF] == "GLIBC_2.2.5"
+    hidden_missing = root / "hidden-missing-symbol.so"
+    shutil.copy2(missing, hidden_missing)
+    mark_hidden(hidden_missing, "absent")
+    run(hidden_missing, False, unchanged=True, libc=hidden_host)
+
+    scan = root / "symlink-scan"
+    scan.mkdir()
+    nested = scan / "nested"
+    nested.mkdir()
+    inside = target("scan-inside", ["anchor", "foo"])
+    inside.rename(nested / inside.name)
+    outside = target("scan-outside", ["anchor", "foo"])
+    outside_before = outside.read_bytes()
+    (scan / "outside.so").symlink_to(outside)
+    (scan / "outside-directory").symlink_to(outside.parent, target_is_directory=True)
+    (nested / "loop").symlink_to(scan, target_is_directory=True)
+    (scan / "broken.so").symlink_to(root / "nonexistent.so")
+    run(scan, True)
+    assert outside.read_bytes() == outside_before, "followed symlink outside target directory"

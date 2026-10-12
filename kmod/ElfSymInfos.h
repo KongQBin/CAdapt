@@ -28,6 +28,7 @@ public:
     std::map<std::string, unsigned long> getSymVerInfo();
     std::map<std::string, modversion_info*> *getVInfo();
     bool isValid() const { return m_valid; }
+    bool flush() { return m_valid && m_eptrs && m_eptrs->flush(); }
 private:
     bool initModInfo();
     bool initSymInfo();

@@ -20,9 +20,9 @@ with tempfile.TemporaryDirectory(prefix="cadapt-kmod-test-") as directory:
         subprocess.run(["cc", "-c", str(code), "-o", str(target)], check=True)
         return target
 
-    def run(target, succeeds, vermagic="new", environment=None):
+    def run(target, succeeds, vermagic="new", environment=None, symvers_file=None):
         before = target.read_bytes() if target.exists() else None
-        args = [str(binary), "-m", str(target), "-s", str(symvers)]
+        args = [str(binary), "-m", str(target), "-s", str(symvers_file or symvers)]
         if vermagic is not None:
             args += ["-v", vermagic]
         result = subprocess.run(
@@ -93,3 +93,33 @@ const char info[] __attribute__((section(".modinfo"))) =
 ''' + versions)
     run(target, True)
     assert b"description=vermagic=leave-this-alone\0vermagic=new\0" in target.read_bytes()
+
+    for label, row, crc in [
+        ("namespace", "0x12345678\tdemo_symbol\tvmlinux\tEXPORT_SYMBOL\tDEMO\n", 0x12345678),
+        ("spaces", "ABCD demo_symbol vmlinux EXPORT_SYMBOL\n", 0xABCD),
+        ("zero-crc", "0x00000000\tdemo_symbol\tvmlinux\tEXPORT_SYMBOL\n", 0),
+        ("max-crc", "0xffffffff\tdemo_symbol\tvmlinux\tEXPORT_SYMBOL\n", 0xFFFFFFFF),
+    ]:
+        source = root / (label + ".symvers")
+        source.write_text(row)
+        target = module(label, modinfo + versions)
+        run(target, True, symvers_file=source)
+        assert struct.pack("@L", crc) + b"demo_symbol\0" in target.read_bytes()
+
+    for label, row in [
+        ("invalid-crc", "xyz"), ("signed-crc", "-1"), ("crc-trailing-junk", "0x12xyz"),
+        ("overflow-crc", "0x100000000"), ("empty-hex-crc", "0x"),
+    ]:
+        source = root / (label + ".symvers")
+        source.write_text(row + "\tdemo_symbol\tvmlinux\tEXPORT_SYMBOL\n")
+        run(module(label, modinfo + versions), False, symvers_file=source)
+    for label, row in [
+        ("too-few-columns", "0x12345678\tdemo_symbol\tvmlinux\n"),
+        ("too-many-columns", "0x12345678\tdemo_symbol\tvmlinux\tEXPORT_SYMBOL\tDEMO\textra\n"),
+        ("valid-then-invalid", symvers.read_text() + "broken\n"),
+        ("conflicting-crc", symvers.read_text() + "0x1\tdemo_symbol\tvmlinux\tEXPORT_SYMBOL\n"),
+    ]:
+        source = root / (label + ".symvers")
+        source.write_text(row)
+        run(module(label, modinfo + versions), False, symvers_file=source)
+    run(module("missing-symvers", modinfo + versions), False, symvers_file=root / "missing.symvers")

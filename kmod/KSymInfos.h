@@ -23,10 +23,12 @@ public:
     KSymInfos(std::string path);
     ~KSymInfos();
     void setPath(std::string path);
-    void initInfos();
+    bool initInfos();
     void printInfos();
-    unsigned long findSym(std::string symname);
+    bool findSym(const std::string& symname, unsigned long& crc) const;
+    bool isValid() const { return m_valid; }
 private:
+    bool m_valid = true; // 未指定文件时允许从系统模块中查找。
     std::string m_path;
     std::map<std::string,KSymInfo> m_infos;
 };

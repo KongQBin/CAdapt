@@ -14,7 +14,8 @@ int main(int argc, char **argv)
     string kmod_path;
     string symvers_path;
     string vermagic_str;
-    bool show_help = false;
+    bool show_help = argc == 1;
+    bool argument_error = false;
 
     static struct option long_options[] = {
         // name,       has_arg,           flag, val
@@ -54,6 +55,7 @@ int main(int argc, char **argv)
             break;
         default:
             show_help = true;
+            argument_error = true;
             break;
         }
     }
@@ -61,6 +63,7 @@ int main(int argc, char **argv)
     if (optind < argc) {
         cerr << "错误：检测到未知的非选项参数。" << endl;
         show_help = true;
+        argument_error = true;
     }
 
     // 判断用户想要执行的任务类型
@@ -70,6 +73,7 @@ int main(int argc, char **argv)
     if (!show_help && !run_glibc && !run_kmod) {
         cerr << "错误：必须指定 GLIBC 适配参数(-c/-t) 或 内核模块适配参数(-m)。" << endl;
         show_help = true;
+        argument_error = true;
     }
 
     // 校验 GLIBC 参数
@@ -77,16 +81,18 @@ int main(int argc, char **argv)
         if (libc_path.empty() || target_path.empty()) {
             cerr << "错误：对于GLIBC适配，--libc 和 --target 都是必需参数。" << endl;
             show_help = true;
+            argument_error = true;
         } else if (libc_path.find("libc.so") == string::npos) {
             cerr << "错误：--libc 参数 \"" << libc_path << "\" 似乎不是一个有效的 libc.so 文件。" << endl;
             show_help = true;
+            argument_error = true;
         }
     }
 
     if (show_help)
     {
         print_help(argv[0]);
-        return (argc == 1) ? 0 : 1;
+        return argument_error ? 1 : 0;
     }
 
 

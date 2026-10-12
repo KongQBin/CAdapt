@@ -15,7 +15,7 @@ public:
     ~ExistingModInfo();
     void printKMods();
     std::string getVermagic();
-    unsigned long findSym(std::string symname);
+    bool findSym(const std::string& symname, unsigned long& crc) const;
 private:
     // 查询系统中正在使用的内核模块
     void queryKMods();
