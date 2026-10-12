@@ -242,7 +242,10 @@ bool OperGlibc::adaptedTargetElfFileGlibcVersion(const string& path)
                 removed_count++;
                 if (prev_naux)
                 {
-                    prev_naux->vna_next = naux->vna_next;
+                    // vna_next 相对于所在节点，跳过当前节点时需从保留节点重新计算。
+                    prev_naux->vna_next = next_naux
+                        ? static_cast<Elf64_Word>(reinterpret_cast<char*>(next_naux) - reinterpret_cast<char*>(prev_naux))
+                        : 0;
                 }
                 else
                 {
