@@ -14,7 +14,8 @@ with tempfile.TemporaryDirectory(prefix="cadapt-elf-test-") as directory:
         code = root / (name + ".c")
         output = root / name
         code.write_text(source)
-        subprocess.run(["cc", *flags, str(code), "-o", str(output)], check=True)
+        # 依赖库必须位于引用它的源文件之后，兼容 Ubuntu 默认的 --as-needed。
+        subprocess.run(["cc", str(code), *flags, "-o", str(output)], check=True)
         return output
 
     versions = root / "versions.map"

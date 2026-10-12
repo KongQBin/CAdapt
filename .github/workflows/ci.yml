@@ -8,6 +8,7 @@ permissions:
 jobs:
   test:
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-22.04, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
@@ -16,7 +17,10 @@ jobs:
         with:
           persist-credentials: false
       - name: Configure strict GNU++11 build
-        run: cmake -S . -B build -DCADAPT_STRICT=ON -DCMAKE_BUILD_TYPE=Release
+        run: >-
+          cmake -S . -B build -DCADAPT_STRICT=ON -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_CXX_FLAGS=-D_FORTIFY_SOURCE=2
+          -DCMAKE_EXE_LINKER_FLAGS=-Wl,--as-needed
       - name: Build
         run: cmake --build build --parallel 2
       - name: Run regression tests

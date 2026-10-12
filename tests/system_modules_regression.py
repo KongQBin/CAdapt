@@ -75,6 +75,9 @@ int open64(const char *path, int flags, ...) {
     char buffer[4096]; int (*real_open)(const char *, int, ...) = dlsym(RTLD_NEXT, "open64");
     return real_open(mapped(path, buffer, sizeof(buffer)), flags, mode);
 }
+/* _FORTIFY_SOURCE may route variable flags through these entry points. */
+int __open_2(const char *path, int flags) { return open(path, flags); }
+int __open64_2(const char *path, int flags) { return open64(path, flags); }
 ''')
     shim = root / "system_shim.so"
     subprocess.run(["cc", "-shared", "-fPIC", str(source), "-o", str(shim), "-ldl"], check=True)
