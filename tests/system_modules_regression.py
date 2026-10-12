@@ -88,6 +88,8 @@ int open64(const char *path, int flags, ...) {
         if not success:
             assert target.read_bytes() == before, "failed source validation changed file"
             assert "内核模块适配成功" not in result.stdout
+        if "-s" in options and "-v" in options:
+            assert "System Name:" not in result.stdout, "unnecessarily queried system modules"
         print("PASS:", label)
         return target
 
@@ -112,3 +114,4 @@ int open64(const char *path, int flags, ...) {
     run("conflicting-system-vermagic", [], False)
     environment["CADAPT_TEST_UNAME_FAIL"] = "1"
     run("uname-failure", [], False)
+    run("explicit-source-without-uname", ["-s", str(explicit), "-v", "foreign"], True)
