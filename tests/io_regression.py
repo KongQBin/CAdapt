@@ -15,7 +15,7 @@ with tempfile.TemporaryDirectory(prefix="cadapt-io-test-") as directory:
         code = root / (name + ".c")
         output = root / name
         code.write_text(source)
-        subprocess.run(["cc", *flags, str(code), "-o", str(output)], check=True)
+        subprocess.run(["cc", str(code), *flags, "-o", str(output)], check=True)
         return output
 
     def library(name, versions):
@@ -45,10 +45,15 @@ const struct version versions[] __attribute__((section("__versions"))) = {{1, "d
 #include <fcntl.h>
 #include <stdarg.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 #include <sys/mman.h>
 int msync(void *addr, size_t len, int flags) {
-    if (getenv("CADAPT_TEST_MSYNC_FAIL")) { errno = EIO; return -1; }
+    if (getenv("CADAPT_TEST_MSYNC_FAIL")) {
+        FILE *marker = fopen(getenv("CADAPT_TEST_MSYNC_MARKER"), "w");
+        if (marker) { fprintf(marker, "%zu", len); fclose(marker); }
+        errno = EIO; return -1;
+    }
     int (*real_msync)(void *, size_t, int) = dlsym(RTLD_NEXT, "msync");
     return real_msync(addr, len, flags);
 }
@@ -68,13 +73,22 @@ int open(const char *path, int flags, ...) {
     int (*real_open)(const char *, int, ...) = dlsym(RTLD_NEXT, "open");
     return real_open(path, flags, mode);
 }
+int __open_2(const char *path, int flags) { return open(path, flags); }
 ''', ["-shared", "-fPIC", "-ldl"])
 
     def run(label, args, **faults):
+        marker = root / (label + ".msync")
+        faults["CADAPT_TEST_MSYNC_MARKER"] = str(marker)
+        file = pathlib.Path(args[args.index("-t") + 1] if "-t" in args else args[args.index("-m") + 1])
+        before = file.read_bytes() if file.is_file() else None
         environment = dict(os.environ, LD_PRELOAD=str(shim), **faults)
         result = subprocess.run([str(binary), *args], env=environment, capture_output=True, text=True, timeout=60)
         assert result.returncode == 1, (label, result.stdout, result.stderr)
         assert "适配完成" not in result.stdout and "适配成功" not in result.stdout, label
+        if "CADAPT_TEST_MSYNC_FAIL" in faults:
+            assert marker.exists(), "test never reached msync: " + result.stdout + result.stderr
+            assert int(marker.read_text()) == file.stat().st_size
+            assert file.read_bytes() != before, "test failed before the intended write"
         print("PASS:", label)
 
     run("glibc-msync-failure", ["-c", str(host), "-t", str(target)], CADAPT_TEST_MSYNC_FAIL="1")
