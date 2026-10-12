@@ -55,7 +55,7 @@ void OperGlibc::initGlibcInfo(const string& glibcPath)
             Elf64_Verdaux *daux = reinterpret_cast<Elf64_Verdaux*>((char *)verdef + verdef->vd_aux);
             Elf64_Verdaux *next_daux;
 
-            for (int cnt = verdef->vd_aux; cnt--; daux = next_daux)
+            for (unsigned cnt = verdef->vd_cnt; cnt--; daux = next_daux)
             {
                 char *name = dynstr + daux->vda_name;
 
@@ -370,9 +370,9 @@ bool OperGlibc::checkFoundDynsym()
         auto verAndId = containsDynsym(string(dynsymName));
         if(verAndId.second == -1)
         {
-            char errInfo[2048] = { 0 };
-            sprintf(errInfo,"目标C库中未找到符号:%-20s    GLIBC版本:%-10s", dynsymName, targetVersionInfo_vct[hveridx].name.c_str());
-            ErrorLog::getErrorLog()->putErrInfo(errInfo, targetElfPtrs->getFilePath());
+            ErrorLog::getErrorLog()->putErrInfo(
+                string("目标C库中未找到符号:") + dynsymName + "    GLIBC版本:" + targetVersionInfo_vct[hveridx].name,
+                targetElfPtrs->getFilePath());
             ret = false;
         }
         else
@@ -389,7 +389,7 @@ bool OperGlibc::checkFoundDynsym()
 
             if(hostIdInTarget != -1)
             {
-                validIndexAndId_vct.push_back({(int)i, (int)hveridx, verAndId.first, hostIdInTarget});
+                validIndexAndId_vct.push_back({i, (int)hveridx, verAndId.first, hostIdInTarget});
             }
             else
             {

@@ -21,7 +21,7 @@ struct TargetVersionInfo
 
 struct SymbolPatchInfo
 {
-    int symbolIndex;
+    size_t symbolIndex;
     int originalTargetVersionIndex;
     std::string hostVersionName;
     int hostVersionId;
