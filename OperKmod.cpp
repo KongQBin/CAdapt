@@ -27,8 +27,9 @@ bool ElfModify::motify(string vermagic)
     for(auto it = vinfo->begin(); it != vinfo->end(); ++it)
     {
         unsigned long crc = 0;
-        // 如果 Module.symvers 中没找到，尝试在当前系统正在运行的模块中查找作为兜底
-        const bool found = m_kinfo.findSym(it->first, crc) || m_minfo.findSym(it->first, crc);
+        // 显式指定文件时，仅使用该文件，避免混入另一个内核的CRC。
+        const bool found = m_kinfo.findSym(it->first, crc) ||
+            (!m_kinfo.hasSource() && m_minfo.findSym(it->first, crc));
         if(!found)
         {
             printf("Symbol: %-32s is not found\n",it->first.c_str());
@@ -45,6 +46,13 @@ bool ElfModify::motify(string vermagic)
     }
     // 校验目标版本魔术及原字段容量。
     const string curSysVer = vermagic.empty() ? m_minfo.getVermagic() : vermagic;
+    if (!m_kinfo.hasSource() && !vinfo->empty() && !vermagic.empty() &&
+        vermagic != m_minfo.getVermagic())
+    {
+        ErrorLog::getErrorLog()->putErrInfo("显式vermagic与系统CRC来源不一致，请提供对应的Module.symvers");
+        fprintf(stderr, "Target vermagic differs from system CRC source; specify --symvers.\n");
+        ret = false;
+    }
     char* vIndex = nullptr;
     list<char *>* modinfo = m_einfo.getMInfo();
     for(list<char *>::iterator it = modinfo->begin(); it != modinfo->end(); ++it)

@@ -27,6 +27,7 @@ public:
     void printInfos();
     bool findSym(const std::string& symname, unsigned long& crc) const;
     bool isValid() const { return m_valid; }
+    bool hasSource() const { return !m_path.empty(); }
 private:
     bool m_valid = true; // 未指定文件时允许从系统模块中查找。
     std::string m_path;
