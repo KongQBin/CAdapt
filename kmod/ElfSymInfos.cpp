@@ -124,14 +124,14 @@ bool ElfSymInfos::initSymInfo()
             break;
         }
         if (info->addr->sh_size % sizeof(struct modversion_info) != 0) break;
-        unsigned int num_versions = info->addr->sh_size / sizeof(struct modversion_info);
+        size_t num_versions = info->addr->sh_size / sizeof(struct modversion_info);
         modversion_info *versions = (modversion_info *)((char*)m_eptrs->elf_hdr + info->addr->sh_offset);
         if(!versions)
         {
             printf("versions is NULL!!!\n");
             break;
         }
-        for(int i = 0; i < num_versions; i++) {
+        for(size_t i = 0; i < num_versions; i++) {
             if (!memchr(versions[i].name, '\0', sizeof(versions[i].name))) return false;
             m_vinfo.insert(make_pair(versions[i].name,&(versions[i])));
             /*                  内核的校验流程                 */
