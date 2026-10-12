@@ -406,7 +406,7 @@ bool OperGlibc::checkFoundDynsym()
         if (hveridx == targetVersionInfo_vct.size()) continue;
 
         const char* dynsymName = dynstr + dynsym[i].st_name;
-        auto verAndId = containsDynsym(string(dynsymName));
+        auto verAndId = containsDynsym(string(dynsymName), targetVersionInfo_vct[hveridx].name);
         if(verAndId.second == -1)
         {
             ErrorLog::getErrorLog()->putErrInfo(
@@ -450,15 +450,24 @@ pair<string, int> OperGlibc::containsVersion(const string& version) const
     return {"", -1};
 }
 
-pair<string, int> OperGlibc::containsDynsym(const string& dynsym) const
+pair<string, int> OperGlibc::containsDynsym(const string& dynsym, const string& preferredVersion) const
 {
+    pair<string, int> first = {"", -1};
+    pair<string, int> available = {"", -1};
     for (const auto& ver : glibcVersionInfo_vct)
     {
         for (const auto& str : ver.symbols)
         {
             if(str == dynsym)
-                return {ver.name, ver.id};
+            {
+                if (ver.name == preferredVersion) return {ver.name, ver.id};
+                if (first.second == -1) first = {ver.name, ver.id};
+                if (available.second == -1)
+                    for (const auto& target : targetVersionInfo_vct)
+                        if (target.name == ver.name) { available = {ver.name, ver.id}; break; }
+                break;
+            }
         }
     }
-    return {"", -1};
+    return available.second != -1 ? available : first;
 }

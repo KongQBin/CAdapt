@@ -214,3 +214,11 @@ with tempfile.TemporaryDirectory(prefix="cadapt-glibc-test-") as directory:
     (scan / "broken.so").symlink_to(root / "nonexistent.so")
     run(scan, True)
     assert outside.read_bytes() == outside_before, "followed symlink outside target directory"
+
+    newer = build_library("multi-version", '''
+int old(void) { return 1; } int current(void) { return 2; }
+__asm__(".symver old,foo@GLIBC_2.2.5");
+__asm__(".symver current,foo@@GLIBC_2.3");
+''', "GLIBC_2.2.5 {}; GLIBC_2.3 {} GLIBC_2.2.5;")
+    compatible = target("already-compatible", ["foo"])
+    run(compatible, True, unchanged=True, libc=newer)
