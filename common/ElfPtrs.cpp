@@ -5,6 +5,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #include <limits>
+#include <set>
 
 namespace {
 bool inRange(Elf64_Xword offset, Elf64_Xword length, Elf64_Xword size)
@@ -223,7 +224,7 @@ bool ElfPtrs::validateTables() const
         if ((table.sh_type == SHT_GNU_verdef || table.sh_type == SHT_GNU_verneed) &&
             !validateVersions(table)) return false;
     }
-    return true;
+    return validateVersionIndices();
 }
 
 bool ElfPtrs::validateVersions(const Elf64_Shdr& table) const
@@ -282,6 +283,53 @@ bool ElfPtrs::validateVersions(const Elf64_Shdr& table) const
         }
         offset += next;
     }
+    return true;
+}
+
+bool ElfPtrs::validateVersionIndices() const
+{
+    const char* base = reinterpret_cast<const char*>(elf_hdr);
+    std::set<unsigned> known = {0, 1};
+    for (unsigned i = 1; i < elf_hdr->e_shnum; ++i)
+    {
+        const Elf64_Shdr& table = sh[i];
+        if (table.sh_type == SHT_GNU_verdef)
+        {
+            const Elf64_Verdef* value = reinterpret_cast<const Elf64_Verdef*>(base + table.sh_offset);
+            for (unsigned j = 0; j < table.sh_info; ++j)
+            {
+                const unsigned id = value->vd_ndx;
+                if (value->vd_flags & VER_FLG_BASE)
+                {
+                    if (id != 1) return false;
+                }
+                else if (id < 2 || id >= 0x8000 || !known.insert(id).second) return false;
+                value = reinterpret_cast<const Elf64_Verdef*>(reinterpret_cast<const char*>(value) + value->vd_next);
+            }
+        }
+        else if (table.sh_type == SHT_GNU_verneed)
+        {
+            const Elf64_Verneed* value = reinterpret_cast<const Elf64_Verneed*>(base + table.sh_offset);
+            for (unsigned j = 0; j < table.sh_info; ++j)
+            {
+                const Elf64_Vernaux* aux = reinterpret_cast<const Elf64_Vernaux*>(reinterpret_cast<const char*>(value) + value->vn_aux);
+                for (unsigned k = 0; k < value->vn_cnt; ++k)
+                {
+                    const unsigned id = aux->vna_other & 0x7fff;
+                    if (id < 2 || !known.insert(id).second) return false;
+                    aux = reinterpret_cast<const Elf64_Vernaux*>(reinterpret_cast<const char*>(aux) + aux->vna_next);
+                }
+                value = reinterpret_cast<const Elf64_Verneed*>(reinterpret_cast<const char*>(value) + value->vn_next);
+            }
+        }
+    }
+    for (unsigned i = 1; i < elf_hdr->e_shnum; ++i)
+        if (sh[i].sh_type == SHT_GNU_versym)
+        {
+            const Elf64_Half* values = reinterpret_cast<const Elf64_Half*>(base + sh[i].sh_offset);
+            for (size_t j = 0; j < sh[i].sh_size / sizeof(Elf64_Half); ++j)
+                if (!known.count(values[j] & 0x7fff)) return false;
+        }
     return true;
 }
 

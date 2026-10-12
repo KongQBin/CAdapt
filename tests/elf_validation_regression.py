@@ -77,6 +77,7 @@ char large_bss[1048576];
         header, offset, size = section(base.read_bytes(), ".gnu.version")
         mutation(mode + "-version-count", base, mode, header + 32, "<Q", size - 2)
         mutation(mode + "-version-type", base, mode, header + 4, "<I", 8)
+        mutation(mode + "-unknown-version-index", base, mode, offset + 2, "<H", 0x7ffe)
         header, offset, size = section(base.read_bytes(), ".dynstr")
         mutation(mode + "-unterminated-dynstr", base, mode, offset + size - 1, "B", 65)
 

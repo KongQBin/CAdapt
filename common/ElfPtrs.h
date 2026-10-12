@@ -44,6 +44,7 @@ public:
 private:
     bool validateTables() const;
     bool validateVersions(const Elf64_Shdr& table) const;
+    bool validateVersionIndices() const;
     int reject(const std::string& reason);
     ElfOpenMode m_mode = ElfOpenMode::ReadOnly;
     std::string m_filePath = "";
