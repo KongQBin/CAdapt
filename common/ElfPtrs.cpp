@@ -149,7 +149,7 @@ int ElfPtrs::initPtrs(const std::string &path)
     if(m_debug)
     {
         printf("TableInfo:\n");
-        printf("\tstrtab addr = %p  %s\n", strtab, strtab);
+        printf("\tstrtab addr = %p  %s\n", static_cast<void*>(strtab), strtab);
     }
 
     // 遍历节头表，统一采用 TableInfo 形式进行存储
@@ -173,9 +173,9 @@ int ElfPtrs::initPtrs(const std::string &path)
             printf("\tname: %-32s type: %d addr: %p str: %02lu strtab: %p\n",
                    info.name.c_str(),
                    info.type,
-                   info.addr,
+                   static_cast<void*>(info.addr),
                    info.str,
-                   info.strtab);
+                   static_cast<void*>(info.strtab));
         }
 
         m_tbinfo[info.name] = info;

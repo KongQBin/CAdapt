@@ -12,6 +12,20 @@
 
 # GLIBC & KMOD 符号版本适配工具 (CAdapt)
 
+构建需要 Linux、支持 GNU++11 的 C++ 编译器和 CMake 3.5+。
+回归检查额外需要 Python 3.7+ 与 `cc`，可通过 CTest 统一运行：
+
+```bash
+cmake -S . -B build -DCADAPT_STRICT=ON
+cmake --build build
+ctest --test-dir build --output-on-failure
+```
+
+仅构建工具时使用 `-DBUILD_TESTING=OFF`。较旧 CMake 可在构建目录内执行 `cmake ..`、`ctest`。
+语言标准固定为 GNU++11；旧系统运行兼容性还需要使用对应的 GLIBC/sysroot 构建。
+当前仅处理带节头表的64位小端ELF；扩展KMOD版本节区会明确拒绝，目标文件保持不变。
+提供 `--symvers` 时只使用该文件中的CRC，不会混入当前内核的CRC。
+
 本项目是一个底层的 ELF/内核模块 修补工具，主要用于解决特定场景下已编译的可执行程序、动态库或驱动程序由于系统版本不匹配而无法运行或加载的问题。
 
 本项目支持两大核心功能：

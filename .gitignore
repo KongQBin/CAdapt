@@ -1,0 +1,5 @@
+/b/
+/build/
+*.user
+*Errlog.txt
+__pycache__/

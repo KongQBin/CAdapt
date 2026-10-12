@@ -28,6 +28,8 @@ class ElfPtrs
 {
 public:
     explicit ElfPtrs(ElfOpenMode mode, bool debug = false);
+    ElfPtrs(const ElfPtrs&) = delete;
+    ElfPtrs& operator=(const ElfPtrs&) = delete;
     ~ElfPtrs();
     int initPtrs(const std::string &path);
     bool flush();
@@ -48,7 +50,7 @@ private:
     int reject(const std::string& reason);
     ElfOpenMode m_mode = ElfOpenMode::ReadOnly;
     std::string m_filePath = "";
-    struct stat m_st = { 0 };
+    struct stat m_st = {};
     bool m_debug = false;
     bool m_flushAttempted = false;
 

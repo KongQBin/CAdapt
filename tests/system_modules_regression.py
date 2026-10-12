@@ -51,6 +51,7 @@ int uname(struct utsname *info) {
     return 0;
 }
 int access(const char *path, int mode) {
+    if (strcmp(path, "/usr/lib/modules/") == 0 || strcmp(path, "/lib/modules/") == 0) return 0;
     char buffer[4096]; int (*real_access)(const char *, int) = dlsym(RTLD_NEXT, "access");
     return real_access(mapped(path, buffer, sizeof(buffer)), mode);
 }

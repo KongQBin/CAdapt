@@ -2,9 +2,8 @@
 
 using namespace std;
 ElfSymInfos::ElfSymInfos(string file, ElfOpenMode mode, bool debug)
-    : m_debug(debug)
+    : m_debug(debug), m_eptrs(new ElfPtrs(mode,debug))
 {
-    m_eptrs = new ElfPtrs(mode,debug);
     if (!m_eptrs->initPtrs(file)) return;
     if (m_eptrs->elf_hdr->e_type != ET_REL ||
         !initModInfo() || !initSymInfo() || getVermagic().empty())
@@ -20,11 +19,6 @@ ElfSymInfos::ElfSymInfos(string file, ElfOpenMode mode, bool debug)
         printModInfo();
         printSymInfo();
     }
-}
-
-ElfSymInfos::~ElfSymInfos()
-{
-    if(m_eptrs) delete m_eptrs;
 }
 
 void ElfSymInfos::printModInfo()
@@ -103,11 +97,6 @@ bool ElfSymInfos::initModInfo()
         ret = true;
     }while(0);
     return ret;
-}
-
-static __u32 resolve_rel_crc(const __u32 *crc)
-{
-    return *(__u32 *)((char *)crc + *crc);
 }
 
 bool ElfSymInfos::initSymInfo()
