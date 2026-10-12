@@ -115,6 +115,12 @@ bool ElfSymInfos::initSymInfo()
     bool ret = false;
     do
     {
+        if (m_eptrs->getTableInfo("__version_ext_names") || m_eptrs->getTableInfo("__version_ext_crcs"))
+        {
+            ErrorLog::getErrorLog()->putErrInfo("暂不支持扩展KMOD符号版本格式，拒绝修改", m_eptrs->getFilePath());
+            fprintf(stderr, "Unsupported extended KMOD version sections; target was not modified.\n");
+            return false;
+        }
         const TableInfo *info = m_eptrs->getTableInfo("__versions");
         // 未启用符号版本校验的模块可以没有 __versions。
         if(!info) return true;

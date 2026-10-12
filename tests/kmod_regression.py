@@ -123,3 +123,9 @@ const char info[] __attribute__((section(".modinfo"))) =
         source.write_text(row)
         run(module(label, modinfo + versions), False, symvers_file=source)
     run(module("missing-symvers", modinfo + versions), False, symvers_file=root / "missing.symvers")
+
+    ext_names = 'const char names[] __attribute__((section("__version_ext_names"))) = "demo_symbol";\n'
+    ext_crcs = 'const unsigned int crcs[] __attribute__((section("__version_ext_crcs"))) = {1};\n'
+    run(module("extended-versions", modinfo + ext_names + ext_crcs), False)
+    run(module("incomplete-extended-versions", modinfo + ext_names), False)
+    run(module("mixed-version-formats", modinfo + versions + ext_names + ext_crcs), False)
