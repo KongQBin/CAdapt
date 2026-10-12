@@ -27,12 +27,13 @@ public:
     std::list<char*>* getMInfo();
     std::map<std::string, unsigned long> getSymVerInfo();
     std::map<std::string, modversion_info*> *getVInfo();
+    bool isValid() const { return m_valid; }
 private:
     bool initModInfo();
     bool initSymInfo();
-    char* nextString(char *str, unsigned long *secsize);
-    bool m_debug;
-    ElfPtrs *m_eptrs;
+    bool m_debug = false;
+    bool m_valid = false;
+    ElfPtrs *m_eptrs = nullptr;
     std::string m_vermagic;
     std::list<char*> m_minfo;
     std::map<std::string, modversion_info*> m_vinfo;

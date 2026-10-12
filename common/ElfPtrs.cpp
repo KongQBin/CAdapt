@@ -100,26 +100,7 @@ int ElfPtrs::initPtrs(const std::string &path)
         m_tbinfo[info.name] = info;
     }
 
-    // 复用原有的检查逻辑，现在通过 getTableInfo 动态判断必需节是否存在
-    if (!getTableInfo(".dynsym") || !getTableInfo(".dynstr") ||
-        !getTableInfo(".gnu.version") || !getTableInfo(".gnu.version_r"))
-    {
-        ErrorLog::getErrorLog()->putErrInfo("没有找到ELF必需的表节 (.dynsym, .dynstr, .gnu.version, .gnu.version_r)", m_filePath);
-        munmap(reinterpret_cast<void*>(elf_hdr), m_st.st_size);
-        elf_hdr = nullptr;
-        m_tbinfo.clear();
-        return 0;
-    }
-
-    if (m_mode == ElfOpenMode::ReadOnly && !getTableInfo(".gnu.version_d"))
-    {
-        ErrorLog::getErrorLog()->putErrInfo("没有找到GLIBC库的 .gnu.version_d 表节", m_filePath);
-        munmap(reinterpret_cast<void*>(elf_hdr), m_st.st_size);
-        elf_hdr = nullptr;
-        m_tbinfo.clear();
-        return 0;
-    }
-
+    // 各业务流程自行检查所需节区；内核模块没有 GLIBC 版本节区。
     return 1;
 }
 
