@@ -36,6 +36,7 @@ const struct version versions[] __attribute__((section("__versions"))) = {{%d, "
 #include <string.h>
 #include <sys/utsname.h>
 #include <unistd.h>
+#include <errno.h>
 static const char *mapped(const char *path, char *buffer, size_t size) {
     const char *marker = "/modules/cadapt-regression-kernel/";
     const char *match = strstr(path, marker);
@@ -44,6 +45,7 @@ static const char *mapped(const char *path, char *buffer, size_t size) {
     return buffer;
 }
 int uname(struct utsname *info) {
+    if (getenv("CADAPT_TEST_UNAME_FAIL")) { errno = EIO; return -1; }
     memset(info, 0, sizeof(*info));
     strcpy(info->sysname, "Linux"); strcpy(info->release, "cadapt-regression-kernel");
     return 0;
@@ -102,3 +104,11 @@ int open64(const char *path, int flags, ...) {
     target = run("explicit-source-with-version", ["-s", str(explicit), "-v", "foreign"], True)
     assert struct.pack("@L", 0x3456) + b"demo_symbol\0" in target.read_bytes()
     assert b"vermagic=foreign\0" in target.read_bytes()
+    module(system / "b.ko", crc=0x9876)
+    (system / "modules.dep").write_text("a.ko:\nb.ko:\n")
+    run("conflicting-system-crc", [], False)
+    run("explicit-source-ignores-conflict", ["-s", str(explicit), "-v", "foreign"], True)
+    module(system / "b.ko", crc=0x12345678, vermagic="new-version")
+    run("conflicting-system-vermagic", [], False)
+    environment["CADAPT_TEST_UNAME_FAIL"] = "1"
+    run("uname-failure", [], False)

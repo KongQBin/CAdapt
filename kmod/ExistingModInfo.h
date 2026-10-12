@@ -16,9 +16,10 @@ public:
     void printKMods();
     std::string getVermagic();
     bool findSym(const std::string& symname, unsigned long& crc) const;
+    bool isValid() const { return m_valid; }
 private:
     // 查询系统中正在使用的内核模块
-    void queryKMods();
+    bool queryKMods();
     // 解析查询到的内核模块的符号信息
     void initAllSymbolVerInfo();
     // 存放的是<内核符号名称,内核符号CRC>
@@ -26,7 +27,8 @@ private:
     // 存放的是<内核模块名称,内核模块路径>
     std::multimap<std::string, std::string> m_kmods;
     // 利用uname函数获取出的系统信息
-    uname_t m_system_info;
+    uname_t m_system_info = {};
+    bool m_valid = true;
     // 存放的是内核版本魔术
     std::string m_vermagic;
 };
