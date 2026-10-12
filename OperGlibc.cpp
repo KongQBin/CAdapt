@@ -115,13 +115,14 @@ void OperGlibc::showGlibcInfo(bool showDynsym) const
     }
 }
 
-void OperGlibc::adaptedTargets(const string& path)
+bool OperGlibc::adaptedTargets(const string& path)
 {
     DIR *dir = opendir(path.c_str());
     targetMaxPathLen = path.size() + 4;
     if(dir)
     {
         closedir(dir);
+        targetElf_vct.clear();
         getAllElf(path.c_str());
 
         for(const auto& str : targetElf_vct)
@@ -129,14 +130,15 @@ void OperGlibc::adaptedTargets(const string& path)
             if(str.size() > (size_t)targetMaxPathLen) targetMaxPathLen = str.size() + 4;
         }
 
+        bool success = !targetElf_vct.empty();
         for(const auto& str : targetElf_vct)
         {
-            adaptedTargetElfFileGlibcVersion(str);
+            if (!adaptedTargetElfFileGlibcVersion(str)) success = false;
         }
+        return success;
     }
     else
-        adaptedTargetElfFileGlibcVersion(path);
-    return;
+        return adaptedTargetElfFileGlibcVersion(path);
 }
 
 void OperGlibc::clearContainer()
@@ -393,7 +395,7 @@ bool OperGlibc::checkFoundDynsym()
             }
         }
     }
-    return true;
+    return ret;
 }
 
 pair<string, int> OperGlibc::containsVersion(const string& version) const

@@ -34,7 +34,7 @@ public:
     ~OperGlibc() = default;
     void initGlibcInfo(const std::string& glibcPath);
     void showGlibcInfo(bool showDynsym = false) const;
-    void adaptedTargets(const std::string& path);
+    bool adaptedTargets(const std::string& path);
     void clearContainer();
 
 private:
