@@ -1,37 +1,66 @@
 <p align="center">
-  <a href="./README_en.md">EN</a>
-  &middot;
-  <a href="./README.md">简/</a>
-  <a href="./README_zh-Hant.md">繁</a>
-  &middot;
-  <a href="./README_ja.md">日</a>
+  <a href="./README_en.md">English</a> &middot;
+  <a href="./README.md">简体中文</a> &middot;
+  <a href="./README_zh-Hant.md">繁體中文</a> &middot;
+  <a href="./README_ja.md">日本語</a>
 </p>
 
-# GLIBC & KMOD 符號版本適配工具 (CAdapt)
+[![CI](https://github.com/KongQBin/CAdapt/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/KongQBin/CAdapt/actions/workflows/ci.yml)
 
-本專案是一個底層的 ELF/核心模組 (Kernel Module) 修補工具，主要用於解決特定場景下已編譯的執行檔、動態函式庫或驅動程式由於系統版本不匹配而無法執行或載入的問題。
+# GLIBC & KMOD 符號版本適配工具（CAdapt）
 
-本專案支援兩大核心功能：
-1. **GLIBC 適配**：解析指定的 `libc.so.6` 所支援的符號，並自動修補目標 ELF 檔案（或目錄）的符號版本依賴，使其與提供的 libc 相容。
-2. **KMOD 適配**：修改 Linux 核心模組 (`.ko`) 的 `vermagic` 和核心符號 CRC 校驗值，繞過核心載入檢查，使其能夠強制載入到版本不完全匹配的核心中。
+CAdapt 是面向 Linux 的 ELF 中繼資料修補工具，可調整已編譯程式、動態函式庫與核心模組的符號版本要求。適用於已確認 ABI 相容，但版本中繼資料阻止執行或載入的情境。
 
-**使用方法 (Usage):**
+## 功能
+
+- **GLIBC**：讀取指定 `libc.so.6` 的符號版本，適配單一 ELF 或目錄；原版本可用時優先保留，保留符號隱藏標記。
+- **KMOD**：修改 `.ko` 的 `vermagic` 與傳統 `__versions` 格式的符號 CRC。
+
+## 建置與檢查
+
+需要 Linux、支援 GNU++11 的 C++ 編譯器與 CMake 3.5+。測試另需 Python 3.7+ 與 `cc`。
+
 ```bash
-# 【GLIBC 適配模式】
-# ./[程式名] -c [宿主libc.so.6的路徑] -t [要適配的ELF檔案或目錄路徑]
-./cadapt -c /path/to/your/libc.so.6 -t /path/to/target_elf_or_directory
-
-# 【KMOD (核心模組) 適配模式】
-# ./[程式名] -m [要修改的.ko檔案] -s [可選: Module.symvers路徑] -v [可選: 目標vermagic字串]
-./cadapt -m ./my_driver.ko -s ./Module.symvers -v "4.18.0-193.el8.x86_64 SMP mod_unload"
-# 註：若不提供 -s 或 -v，程式將嘗試自動從目前執行的系統中提取相關 CRC 和魔術字串資訊。
+cmake -S . -B build -DCADAPT_STRICT=ON
+cmake --build build
+ctest --test-dir build --output-on-failure
 ```
 
-# ⚠️ 警告：關於 ABI 相容性與核心崩潰風險
-- 僅修改元資料：本專案 只修改 ELF 或 KO 檔案中的符號版本元資料（如 .gnu.version 節區或符號 CRC 校驗碼），不會且無法檢查或修復由於底層版本變更引起的 ABI (應用程式二進位介面) 不相容問題。
+語言標準固定為 **GNU++11**。`CADAPT_STRICT=ON` 將編譯警告與語言擴充視為錯誤。僅建置工具可加 `-DBUILD_TESTING=OFF`，不需 Python。較舊 CMake 可進入建置目錄執行 `cmake ..` 與 `ctest`。在舊系統執行時，請使用對應的 GLIBC/sysroot 建置。
 
-- GLIBC 崩潰風險：如果函式（例如 memcpy 或 fopen）在新舊 libc 間的行為、參數或其內部使用的資料結構發生了實質性變化，程式在執行時極有可能因 ABI 不匹配而觸發段錯誤 (Segmentation Fault) 或產生不可預期的髒資料。
+## 使用
 
-- KMOD 崩潰風險 (Kernel Panic)：強制修改 .ko 的 CRC 和 vermagic 繞過了核心的安全檢查機制。如果核心匯出符號（如核心結構體佈局）發生了改變，強行載入修改後的模組將直接導致核心崩潰 (Kernel Panic / Oops)。
+```bash
+./build/cadapt -h
 
-- 此工具假設您已自行確認新舊環境間的 ABI 是完全相容的。請僅在您確切知道自己在做什麼的情況下使用，並在操作前務必備份原檔案。
+# GLIBC
+./build/cadapt -c /path/to/libc.so.6 -t /path/to/target_elf_or_directory
+
+# KMOD
+./build/cadapt -m ./my_driver.ko -s ./Module.symvers \
+  -v "4.18.0-193.el8.x86_64 SMP mod_unload"
+```
+
+### 參數與行為
+
+- 提供 `-s/--symvers` 時，CRC 僅取自該檔案；缺少符號時不會默默從目前核心補齊。
+- 省略 `-s` 或 `-v` 時，依需求從目前系統模組取得 CRC 或 `vermagic`。使用系統 CRC 時，明確指定的 `vermagic` 必須與其來源一致；適配其他核心請提供對應的 `Module.symvers` 與 `vermagic`。
+- KMOD 完整驗證後才寫入；驗證失敗時目標保持不變。同步寫入失敗會回傳失敗，但不保證復原已寫入的內容。
+- 目錄掃描略過符號連結。正常說明回傳 `0`，參數或適配失敗回傳非零退出碼。
+
+## 審查、修復與驗證
+
+**2026-10-12，專案藉助 OpenAI Codex 完成一輪程式碼審查、問題修復與迴歸驗證。** 修復記錄可於[提交歷史](https://github.com/KongQBin/CAdapt/commits/main/)查閱，驗證基準為 [`4af3cbc`](https://github.com/KongQBin/CAdapt/commit/4af3cbc)。
+
+- 本機使用 **GCC 9.5 與 GCC 15.2** 完成 GNU++11 嚴格編譯，八項 CTest 檢查全部通過。
+- 檢查涵蓋命令列、GLIBC 版本選擇與隱藏位元、KMOD CRC／來源衝突、異常 ELF、掃描與同步失敗、日誌及資源所有權。
+- 迴歸腳本位於 [tests/](./tests/)，CI 設定位於 [ci.yml](./.github/workflows/ci.yml)；遠端執行狀態見頁面上方徽章。
+
+上述說明記錄 AI 輔助審查與實際測試結果，不代表 OpenAI 官方認證，也不保證任意檔案或 ABI 的相容性。
+
+## 支援範圍與風險
+
+- 目前支援帶節標頭表的 **64 位元小端序 ELF**；不支援 32 位元、大端序或擴充節區編號。
+- 擴充 KMOD 節區 `__version_ext_names`／`__version_ext_crcs` 會明確拒絕修改。
+- 工具直接修改原檔，請先備份。僅修改中繼資料，無法檢查或修復 ABI 差異；程式仍可能當機，不相容核心模組可能引發 Kernel Panic/Oops。
+- 錯誤日誌寫入執行檔目錄下的 `cadaptErrlog.txt`；日誌無法寫入時會輸出至 stderr。
