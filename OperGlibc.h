@@ -4,6 +4,7 @@
 #include <utility>
 #include <vector>
 #include <memory>
+#include <unordered_map>
 #include "ElfPtrs.h"
 
 struct GlibcVersionInfo
@@ -57,4 +58,6 @@ private:
     std::vector<TargetVersionInfo> targetVersionInfo_vct;
     std::vector<SymbolPatchInfo> validIndexAndId_vct;
     std::vector<GlibcVersionInfo> glibcVersionInfo_vct;
+    std::unordered_map<std::string, int> versionIds;
+    std::unordered_map<std::string, std::vector<std::pair<std::string, int>>> symbolVersions;
 };
