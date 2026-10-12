@@ -15,7 +15,13 @@ ExistingModInfo::ExistingModInfo()
         printf("Domain Name: %s\n", m_system_info.domainname);
 #endif
     }
-    queryKMods();
+    else
+    {
+        m_valid = false;
+        ErrorLog::getErrorLog()->putErrInfo("uname失败，无法确定系统模块来源");
+        return;
+    }
+    if (!queryKMods()) { m_valid = false; return; }
     initAllSymbolVerInfo();
 }
 
@@ -36,18 +42,19 @@ void ExistingModInfo::printKMods()
 
 string ExistingModInfo::getVermagic()
 {
-    return m_vermagic;
+    return m_valid ? m_vermagic : "";
 }
 
 bool ExistingModInfo::findSym(const string& symname, unsigned long& crc) const
 {
+    if (!m_valid) return false;
     auto it = m_va_infos.find(symname);
     if(it == m_va_infos.end()) return false;
     crc = it->second;
     return true;
 }
 
-void ExistingModInfo::queryKMods()
+bool ExistingModInfo::queryKMods()
 {
     list<string> md;
     string basepath = "/usr/lib/modules/";
@@ -59,7 +66,7 @@ void ExistingModInfo::queryKMods()
     if(access(basepath.c_str(), F_OK))
     {
         cerr << "Path: " << basepath << " is not found!" << endl;
-        return;
+        return false;
     }
 
     string modulespath = basepath + string(m_system_info.release) + "/";
@@ -82,8 +89,12 @@ void ExistingModInfo::queryKMods()
             }
             md.insert(md.end(),mod_dep.begin(),mod_dep.end());
         }
+        if (modules.bad()) return false;
         modules.close(); // 关闭文件
-    } else cerr << "Unable to open file." << endl;
+    } else {
+        ErrorLog::getErrorLog()->putErrInfo("无法读取系统modules.dep", modulespath);
+        return false;
+    }
 
     md.sort();
     md.unique(); // 使用自带去重
@@ -94,6 +105,7 @@ void ExistingModInfo::queryKMods()
         list<string> plist = splitString(path,'/');
         m_kmods.insert(make_pair(plist.back(),path));
     }
+    return true;
 }
 
 void ExistingModInfo::initAllSymbolVerInfo()
@@ -101,6 +113,7 @@ void ExistingModInfo::initAllSymbolVerInfo()
     for(auto it = m_kmods.begin(); it != m_kmods.end(); ++it)
     {
         ElfSymInfos infos(it->second,ElfOpenMode::ReadOnly,false);
+        if (!infos.isValid()) continue;
         // 获取版本魔术
         string newVermagic = infos.getVermagic();
         if(m_vermagic.empty())
@@ -109,10 +122,12 @@ void ExistingModInfo::initAllSymbolVerInfo()
         {
             printf("Warning : old magic = %s new magic = %s\n",
                    m_vermagic.c_str(),newVermagic.c_str());
+            m_valid = false;
+            ErrorLog::getErrorLog()->putErrInfo("系统模块vermagic冲突", it->second);
         }
         else {}
         // 获取现有驱动的所有符号的CRC信息
-        map<string, unsigned long> tmp(move(infos.getSymVerInfo()));
+        map<string, unsigned long> tmp = infos.getSymVerInfo();
         for(auto it2 = tmp.begin(); it2 != tmp.end(); ++it2)
         {
             auto index = m_va_infos.find(it2->first);
@@ -122,13 +137,15 @@ void ExistingModInfo::initAllSymbolVerInfo()
                 if(index->second != it2->second)
                 {
                     printf("Has repetitive crc name is %-32s %lu and %lu\n", it2->first.c_str(), it2->second, index->second);
-                    m_va_infos.insert(make_pair(it2->first,it2->second));
+                    m_valid = false;
+                    ErrorLog::getErrorLog()->putErrInfo("系统模块CRC冲突:" + it2->first, it->second);
                 }
             }
             else
                 m_va_infos.insert(make_pair(it2->first,it2->second));
         }
     }
+    if (!m_valid) { m_va_infos.clear(); m_vermagic.clear(); }
     printf("init %s symbol size = %zu\n",m_va_infos.size() ? "success" : "fail", m_va_infos.size());
 //    if(m_va_infos.size())
 //    {
