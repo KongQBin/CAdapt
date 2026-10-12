@@ -39,12 +39,12 @@ string ExistingModInfo::getVermagic()
     return m_vermagic;
 }
 
-unsigned long ExistingModInfo::findSym(string symname)
+bool ExistingModInfo::findSym(const string& symname, unsigned long& crc) const
 {
-    unsigned long ret = 0;
     auto it = m_va_infos.find(symname);
-    if(it != m_va_infos.end()) ret = it->second;
-    return ret;
+    if(it == m_va_infos.end()) return false;
+    crc = it->second;
+    return true;
 }
 
 void ExistingModInfo::queryKMods()
@@ -129,7 +129,7 @@ void ExistingModInfo::initAllSymbolVerInfo()
                 m_va_infos.insert(make_pair(it2->first,it2->second));
         }
     }
-    printf("init %s symbol size = %d\n",m_va_infos.size() ? "success" : "fail", m_va_infos.size());
+    printf("init %s symbol size = %zu\n",m_va_infos.size() ? "success" : "fail", m_va_infos.size());
 //    if(m_va_infos.size())
 //    {
 //        for(auto it : m_va_infos)

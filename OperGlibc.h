@@ -38,8 +38,8 @@ public:
     void clearContainer();
 
 private:
-    void getAllElf(const char *dir);
-    bool isElf(const char *file) const;
+    bool getAllElf(const char *dir);
+    int isElf(const char *file) const; // 1: ELF，0: 非ELF，-1: 读取失败。
 
     bool adaptedTargetElfFileGlibcVersion(const std::string& path);
     bool checkFoundDynsym();

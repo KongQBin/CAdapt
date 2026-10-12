@@ -8,6 +8,7 @@
 #include <sys/stat.h>
 #include <set>
 #include <utility>
+#include <cerrno>
 
 using namespace std;
 
@@ -68,7 +69,7 @@ void OperGlibc::initGlibcInfo(const string& glibcPath)
 
                     for (size_t i = 1; i < tb_version->addr->sh_size / sizeof(unsigned short); i++)
                     {
-                        if(versions[i] == verdef->vd_ndx)
+                        if((versions[i] & 0x7fff) == verdef->vd_ndx)
                         {
                             string s_dynsym = string(dynstr + dynsym[i].st_name);
                             if(s_dynsym != name)
@@ -123,7 +124,7 @@ bool OperGlibc::adaptedTargets(const string& path)
     {
         closedir(dir);
         targetElf_vct.clear();
-        getAllElf(path.c_str());
+        if (!getAllElf(path.c_str())) return false;
 
         for(const auto& str : targetElf_vct)
         {
@@ -148,35 +149,61 @@ void OperGlibc::clearContainer()
     validIndexAndId_vct.clear();
 }
 
-void OperGlibc::getAllElf(const char *dir)
+bool OperGlibc::getAllElf(const char *dir)
 {
     DIR *d;
     struct dirent *file;
     struct stat sb;
     string filePath;
 
-    if(!(d = opendir(dir))) return;
-    while((file = readdir(d)) != NULL)
+    if(!(d = opendir(dir)))
     {
+        ErrorLog::getErrorLog()->putErrInfo("扫描目录失败", dir);
+        return false;
+    }
+    bool success = true;
+    while(true)
+    {
+        errno = 0;
+        file = readdir(d);
+        if (!file)
+        {
+            if (errno != 0)
+            {
+                ErrorLog::getErrorLog()->putErrInfo("读取目录失败", dir);
+                success = false;
+            }
+            break;
+        }
         if(strcmp(file->d_name, ".") == 0 || strcmp(file->d_name, "..") == 0)
             continue;
         filePath = string(dir) + "/" + file->d_name;
-        if(stat(filePath.c_str(), &sb) >= 0)
+        if(lstat(filePath.c_str(), &sb) >= 0)
         {
-            if(S_ISDIR(sb.st_mode) && !S_ISLNK(sb.st_mode))
-                getAllElf(filePath.c_str());
+            if(S_ISLNK(sb.st_mode)) continue;
+            if(S_ISDIR(sb.st_mode))
+            {
+                if (!getAllElf(filePath.c_str())) success = false;
+            }
             else if(S_ISREG(sb.st_mode))
             {
-                if(isElf(filePath.c_str()))
+                const int result = isElf(filePath.c_str());
+                if (result < 0) success = false;
+                else if (result > 0)
                     targetElf_vct.push_back(filePath);
             }
         }
+        else
+        {
+            ErrorLog::getErrorLog()->putErrInfo("读取目录项状态失败", filePath);
+            success = false;
+        }
     }
     closedir(d);
-    return;
+    return success;
 }
 
-bool OperGlibc::isElf(const char *file) const
+int OperGlibc::isElf(const char *file) const
 {
     bool ret = false;
     const char elfHead[7] = {0x7f,0x45,0x4c,0x46,0x02,0x01,0x01};
@@ -184,9 +211,20 @@ bool OperGlibc::isElf(const char *file) const
     int fd = 0;
 
     fd = open(file, O_RDONLY);
-    if(fd < 0) return false;
+    if(fd < 0)
+    {
+        ErrorLog::getErrorLog()->putErrInfo("扫描时打开文件失败", file);
+        return -1;
+    }
 
-    if(sizeof(targetHead) == read(fd,targetHead,sizeof(targetHead)))
+    const ssize_t bytes = read(fd,targetHead,sizeof(targetHead));
+    if(bytes < 0)
+    {
+        close(fd);
+        ErrorLog::getErrorLog()->putErrInfo("扫描时读取文件失败", file);
+        return -1;
+    }
+    if(static_cast<size_t>(bytes) == sizeof(targetHead))
         if(memcmp(elfHead,targetHead,sizeof(targetHead)) == 0) ret = true;
     close(fd);
     return ret;
@@ -299,10 +337,11 @@ bool OperGlibc::adaptedTargetElfFileGlibcVersion(const string& path)
                    (unsigned short)patch.hostVersionId,
                    path.c_str());
 
-            target_versions[patch.symbolIndex] = patch.hostVersionId;
+            // 保留符号原有的隐藏标记，只替换低15位的版本编号。
+            target_versions[patch.symbolIndex] = (target_versions[patch.symbolIndex] & 0x8000) | patch.hostVersionId;
         }
     }
-    return true;
+    return targetElfPtrs->flush();
 }
 
 bool OperGlibc::checkFoundDynsym()
@@ -344,7 +383,7 @@ bool OperGlibc::checkFoundDynsym()
             while(true)
             {
                 char *name = dynstr + naux->vna_name;
-                targetVersionInfo_vct.push_back({string(name), naux->vna_other});
+                targetVersionInfo_vct.push_back({string(name), naux->vna_other & 0x7fff});
 
                 if(naux->vna_next == 0) break;
                 naux = reinterpret_cast<Elf64_Vernaux*>((char *)naux + naux->vna_next);
@@ -360,7 +399,7 @@ bool OperGlibc::checkFoundDynsym()
 
     for (size_t i = 1; i < tb_version->addr->sh_size / sizeof(unsigned short); i++)
     {
-        unsigned short v = versions[i];
+        unsigned short v = versions[i] & 0x7fff;
         unsigned hveridx = 0;
         for (; hveridx < targetVersionInfo_vct.size(); ++hveridx)
             if (v == targetVersionInfo_vct[hveridx].id) break;

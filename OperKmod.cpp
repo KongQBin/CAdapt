@@ -19,17 +19,17 @@ ElfModify::~ElfModify()
 
 bool ElfModify::motify(string vermagic)
 {
-    if (!m_einfo.isValid()) return false;
+    if (!m_einfo.isValid() || !m_kinfo.isValid()) return false;
     bool ret = true;
     // 先记录所有修改；检查完成前不写入共享映射。
     vector<pair<modversion_info*, unsigned long>> patches;
     map<string, modversion_info *> *vinfo = m_einfo.getVInfo();
     for(auto it = vinfo->begin(); it != vinfo->end(); ++it)
     {
-        unsigned long crc =  m_kinfo.findSym(it->first);
+        unsigned long crc = 0;
         // 如果 Module.symvers 中没找到，尝试在当前系统正在运行的模块中查找作为兜底
-        if(!crc) crc = m_minfo.findSym(it->first);
-        if(!crc)
+        const bool found = m_kinfo.findSym(it->first, crc) || m_minfo.findSym(it->first, crc);
+        if(!found)
         {
             printf("Symbol: %-32s is not found\n",it->first.c_str());
             ErrorLog::getErrorLog()->putErrInfo("目标内核中未找到符号:" + it->first);
@@ -76,5 +76,5 @@ bool ElfModify::motify(string vermagic)
     memset(vIndex, 0, capacity + 1);
     memcpy(vIndex, curSysVer.data(), curSysVer.size());
     printf("modify ver str magic to %s\n", vIndex);
-    return true;
+    return m_einfo.flush();
 }

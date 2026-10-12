@@ -30,6 +30,7 @@ public:
     explicit ElfPtrs(ElfOpenMode mode, bool debug = false);
     ~ElfPtrs();
     int initPtrs(const std::string &path);
+    bool flush();
     const std::string getFilePath() const;
 
     // 获取对应的 TableInfo
@@ -48,6 +49,7 @@ private:
     std::string m_filePath = "";
     struct stat m_st = { 0 };
     bool m_debug = false;
+    bool m_flushAttempted = false;
 
     // 全面采用 map 统一存储所有的 TableInfo
     std::map<std::string, TableInfo> m_tbinfo;

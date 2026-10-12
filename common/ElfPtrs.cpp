@@ -40,19 +40,29 @@ ElfPtrs::~ElfPtrs()
 {
     if(elf_hdr != MAP_FAILED && elf_hdr != nullptr)
     {
-        if(m_mode == ElfOpenMode::ReadWrite)
-        {
-            if(msync(reinterpret_cast<void*>(elf_hdr), m_st.st_size, MS_SYNC) < 0)
-                ErrorLog::getErrorLog()->putErrInfo("msync error", m_filePath);
-        }
+        if(m_mode == ElfOpenMode::ReadWrite && !m_flushAttempted) flush();
         munmap(reinterpret_cast<void*>(elf_hdr), m_st.st_size);
         elf_hdr = nullptr;
     }
 }
 
+bool ElfPtrs::flush()
+{
+    if (!elf_hdr || elf_hdr == MAP_FAILED) return false;
+    if (m_mode == ElfOpenMode::ReadOnly) return true;
+    m_flushAttempted = true;
+    if (msync(reinterpret_cast<void*>(elf_hdr), m_st.st_size, MS_SYNC) < 0)
+    {
+        ErrorLog::getErrorLog()->putErrInfo("msync error", m_filePath);
+        return false;
+    }
+    return true;
+}
+
 int ElfPtrs::initPtrs(const std::string &path)
 {
     if(elf_hdr) return 0;
+    m_flushAttempted = false;
     m_filePath = path;
 
     int fd = -1;
