@@ -99,7 +99,10 @@ int main(int argc, char **argv)
 
         OperGlibc localVersion;
         localVersion.initGlibcInfo(libc_path);
-        localVersion.adaptedTargets(target_path);
+        if (!localVersion.adaptedTargets(target_path)) {
+            cerr << "GLIBC 适配失败，请检查日志。" << endl;
+            return 1;
+        }
 
         cout << "GLIBC 适配完成。" << endl;
     }
