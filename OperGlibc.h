@@ -45,7 +45,7 @@ private:
     bool checkFoundDynsym();
 
     std::pair<std::string, int> containsVersion(const std::string& version) const;
-    std::pair<std::string, int> containsDynsym(const std::string& dynsym) const;
+    std::pair<std::string, int> containsDynsym(const std::string& dynsym, const std::string& preferredVersion) const;
 
     std::unique_ptr<ElfPtrs> glibcPtrs;
     std::unique_ptr<ElfPtrs> targetElfPtrs;
