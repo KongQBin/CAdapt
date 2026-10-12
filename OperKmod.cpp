@@ -18,6 +18,7 @@ ElfModify::~ElfModify()
 
 bool ElfModify::motify(string vermagic)
 {
+    if (!m_einfo.isValid()) return false;
     bool ret = true;
     // 修改符号CRC
     map<string, modversion_info *> *vinfo = m_einfo.getVInfo();

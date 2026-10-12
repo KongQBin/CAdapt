@@ -2,12 +2,19 @@
 
 using namespace std;
 ElfSymInfos::ElfSymInfos(string file, ElfOpenMode mode, bool debug)
+    : m_debug(debug)
 {
     m_eptrs = new ElfPtrs(mode,debug);
-    m_eptrs->initPtrs(file);
-    initModInfo();
-    initSymInfo();
-    m_debug = debug;
+    if (!m_eptrs->initPtrs(file)) return;
+    if (m_eptrs->elf_hdr->e_type != ET_REL ||
+        !initModInfo() || !initSymInfo() || getVermagic().empty())
+    {
+        ErrorLog::getErrorLog()->putErrInfo("内核模块初始化失败：需要有效的 .modinfo/vermagic 和符号版本信息", file);
+        m_minfo.clear();
+        m_vinfo.clear();
+        return;
+    }
+    m_valid = true;
     if(m_debug)
     {
         printModInfo();
@@ -40,7 +47,7 @@ string ElfSymInfos::getVermagic()
     const char *vermagic = "vermagic=";
     for(auto it : m_minfo)
     {
-        if(!strstr(it,vermagic)) continue;
+        if(strncmp(it,vermagic,strlen(vermagic)) != 0) continue;
         return string(it+strlen(vermagic));
     }
     return "";
@@ -79,14 +86,21 @@ bool ElfSymInfos::initModInfo()
             break;
         }
         unsigned long size = info->addr->sh_size;
+        if (!size) break;
         /*
         * get_modinfo() calls made before rewrite_section_headers()
         * must use sh_offset, as sh_addr isn't set!
         */
         char *modinfo = (char *)m_eptrs->elf_hdr + info->addr->sh_offset;
-        for (char *p = modinfo; p; p = nextString(p, &size)) {
-            m_minfo.push_back(p);
+        for (char *p = modinfo; size > 0;) {
+            char *end = static_cast<char*>(memchr(p, '\0', size));
+            if (!end) return false;
+            if (*p) m_minfo.push_back(p);
+            const size_t consumed = end - p + 1;
+            size -= consumed;
+            p = end + 1;
         }
+        ret = true;
     }while(0);
     return ret;
 }
@@ -102,12 +116,14 @@ bool ElfSymInfos::initSymInfo()
     do
     {
         const TableInfo *info = m_eptrs->getTableInfo("__versions");
-        if(!info) break;
+        // 未启用符号版本校验的模块可以没有 __versions。
+        if(!info) return true;
         if(!info->addr)
         {
             printf("info.addr is NULL!!!\n");
             break;
         }
+        if (info->addr->sh_size % sizeof(struct modversion_info) != 0) break;
         unsigned int num_versions = info->addr->sh_size / sizeof(struct modversion_info);
         modversion_info *versions = (modversion_info *)((char*)m_eptrs->elf_hdr + info->addr->sh_offset);
         if(!versions)
@@ -116,6 +132,7 @@ bool ElfSymInfos::initSymInfo()
             break;
         }
         for(int i = 0; i < num_versions; i++) {
+            if (!memchr(versions[i].name, '\0', sizeof(versions[i].name))) return false;
             m_vinfo.insert(make_pair(versions[i].name,&(versions[i])));
             /*                  内核的校验流程                 */
             //        u32 crcval;
@@ -131,25 +148,7 @@ bool ElfSymInfos::initSymInfo()
             //                 crcval, versions[i].crc);
             //        goto bad_version;
         }
+        ret = true;
     }while(0);
     return ret;
-}
-
-/* Parse tag=value strings from .modinfo section */
-char* ElfSymInfos::nextString(char *str, unsigned long *secsize)
-{
-    /* Skip non-zero chars */
-    while (str[0]) {
-        str++;
-        if ((*secsize)-- <= 1)
-            return NULL;
-    }
-
-    /* Skip any zero padding. */
-    while (!str[0]) {
-        str++;
-        if ((*secsize)-- <= 1)
-            return NULL;
-    }
-    return str;
 }

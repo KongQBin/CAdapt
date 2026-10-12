@@ -120,12 +120,14 @@ int main(int argc, char **argv)
             modifier = new ElfModify(kmod_path);
         }
 
-        if (modifier->motify(vermagic_str)) {
+        const bool success = modifier->motify(vermagic_str);
+        if (success) {
             cout << "内核模块适配成功。" << endl;
         } else {
             cerr << "内核模块适配过程中存在失败项，请检查日志。" << endl;
         }
         delete modifier;
+        if (!success) return 1;
     }
 
     cout << "--------------------------------------------------------" << endl;
