@@ -1,0 +1,23 @@
+name: GNU++11 build and regression tests
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Configure strict GNU++11 build
+        run: cmake -S . -B build -DCADAPT_STRICT=ON -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build --parallel 2
+      - name: Run regression tests
+        run: ctest --test-dir build --output-on-failure

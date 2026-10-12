@@ -16,11 +16,6 @@ void OperGlibc::initGlibcInfo(const string& glibcPath)
 {
     if(glibcPtrs) return;
     glibcPtrs.reset(new ElfPtrs(ElfOpenMode::ReadOnly));
-    if(!glibcPtrs)
-    {
-        ErrorLog::getErrorLog()->putErrInfo("初始化GlibcElf失败(new)", glibcPath);
-        return;
-    }
     if(!glibcPtrs->initPtrs(glibcPath.c_str()))
     {
         ErrorLog::getErrorLog()->putErrInfo("initGlibcPtrs失败", glibcPath);
@@ -54,10 +49,7 @@ void OperGlibc::initGlibcInfo(const string& glibcPath)
         if(!(verdef->vd_flags & VER_FLG_BASE))
         {
             Elf64_Verdaux *daux = reinterpret_cast<Elf64_Verdaux*>((char *)verdef + verdef->vd_aux);
-            Elf64_Verdaux *next_daux;
-
             // 首个辅助项是版本名，其余辅助项为父版本，不应创建新的符号归属。
-            for (unsigned cnt = 1; cnt--; daux = next_daux)
             {
                 char *name = dynstr + daux->vda_name;
 
@@ -79,7 +71,6 @@ void OperGlibc::initGlibcInfo(const string& glibcPath)
                     }
                     glibcVersionInfo_vct.push_back(move(versionInfo));
                 }
-                next_daux = reinterpret_cast<Elf64_Verdaux*>((char *)daux + daux->vda_next);
             }
         }
         next_verdef = reinterpret_cast<Elf64_Verdef*>((char *)verdef + verdef->vd_next);
@@ -126,17 +117,11 @@ void OperGlibc::showGlibcInfo(bool showDynsym) const
 bool OperGlibc::adaptedTargets(const string& path)
 {
     DIR *dir = opendir(path.c_str());
-    targetMaxPathLen = path.size() + 4;
     if(dir)
     {
         closedir(dir);
         targetElf_vct.clear();
         if (!getAllElf(path.c_str())) return false;
-
-        for(const auto& str : targetElf_vct)
-        {
-            if(str.size() > (size_t)targetMaxPathLen) targetMaxPathLen = str.size() + 4;
-        }
 
         bool success = !targetElf_vct.empty();
         for(const auto& str : targetElf_vct)
@@ -243,11 +228,6 @@ bool OperGlibc::adaptedTargetElfFileGlibcVersion(const string& path)
     if(glibcVersionInfo_vct.empty()) return false;
 
     targetElfPtrs.reset(new ElfPtrs(ElfOpenMode::ReadWrite));
-    if(!targetElfPtrs)
-    {
-        ErrorLog::getErrorLog()->putErrInfo("初始化TargetElf失败(new)", path);
-        return false;
-    }
     if(!targetElfPtrs->initPtrs(path.c_str()))
     {
         ErrorLog::getErrorLog()->putErrInfo("initTargetPtrs失败", path);

@@ -52,8 +52,6 @@ private:
     std::unique_ptr<ElfPtrs> targetElfPtrs;
 
     Elf64_Verneed *targetElfLibcVerneed = nullptr;
-    int targetMaxPathLen = 0;
-
     std::vector<std::string> targetElf_vct;
     std::vector<TargetVersionInfo> targetVersionInfo_vct;
     std::vector<SymbolPatchInfo> validIndexAndId_vct;

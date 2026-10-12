@@ -5,7 +5,7 @@
 #include <string>
 
 // 检测当前语言环境
-bool is_chinese_locale()
+inline bool is_chinese_locale()
 {
     const char* env_vars[] = {"LC_ALL", "LC_MESSAGES", "LANG"};
     for (const char* var : env_vars)
@@ -23,7 +23,7 @@ bool is_chinese_locale()
 }
 
 // 打印帮助
-void print_help(const char* prog_name)
+inline void print_help(const char* prog_name)
 {
     std::cout << "------------------------->Help Info<-------------------------" << std::endl;
     std::cout << "Usage: " << prog_name << " [Options]" << std::endl;

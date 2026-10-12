@@ -2,6 +2,7 @@
 #include <list>
 #include <cstring>
 #include <linux/types.h>
+#include <memory>
 #include "ElfPtrs.h"
 
 // 大部分实现参考/复制至内核源码
@@ -20,7 +21,9 @@ class ElfSymInfos
 public:
     ElfSymInfos(){}
     ElfSymInfos(std::string file, ElfOpenMode mode, bool debug = true);
-    ~ElfSymInfos();
+    ~ElfSymInfos() = default;
+    ElfSymInfos(const ElfSymInfos&) = delete;
+    ElfSymInfos& operator=(const ElfSymInfos&) = delete;
     void printModInfo();
     void printSymInfo();
     std::string getVermagic();
@@ -34,8 +37,7 @@ private:
     bool initSymInfo();
     bool m_debug = false;
     bool m_valid = false;
-    ElfPtrs *m_eptrs = nullptr;
-    std::string m_vermagic;
+    std::unique_ptr<ElfPtrs> m_eptrs;
     std::list<char*> m_minfo;
     std::map<std::string, modversion_info*> m_vinfo;
 };
