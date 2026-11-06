@@ -37,7 +37,7 @@ inline void print_help(const char* prog_name)
         std::cout << std::endl;
         std::cout << "【动态链接器(解释器)适配选项】" << std::endl;
         std::cout << "  -i, --interp <path>   必需(与 -p 二选一)。指定新的动态链接器绝对路径。" << std::endl;
-        std::cout << "                        第一阶段只支持等长或更短的路径，更长路径会被拒绝且不修改文件。" << std::endl;
+        std::cout << "                        等长或更短的路径原地改写；更长路径会重写文件：新串追加到文件末尾，PT_INTERP 改指新位置。" << std::endl;
         std::cout << "  -p, --print-interp    只查看目标的当前解释器，不修改文件。" << std::endl;
         std::cout << "      --dry-run         与 -i 联用时只打印将要做的修改，不写文件。" << std::endl;
         std::cout << "  -t, --target <path>   必需。指定要修改解释器的ELF文件/所在目录。" << std::endl;
@@ -64,7 +64,7 @@ inline void print_help(const char* prog_name)
         std::cout << std::endl;
         std::cout << "[Dynamic Linker (Interpreter) Adaptation Options]" << std::endl;
         std::cout << "  -i, --interp <path>   Required (either -i or -p). Absolute path of the new dynamic linker." << std::endl;
-        std::cout << "                        Phase 1 only supports a path of equal or shorter length; a longer path is rejected without modifying the file." << std::endl;
+        std::cout << "                        A path of equal or shorter length is patched in place; a longer path rewrites the file: the new string is appended at the end and PT_INTERP is repointed to it." << std::endl;
         std::cout << "  -p, --print-interp    Show the target's current interpreter without modifying the file." << std::endl;
         std::cout << "      --dry-run         With -i, only print the planned change without writing the file." << std::endl;
         std::cout << "  -t, --target <path>   Required. Path to the ELF file or directory whose interpreter is to be changed." << std::endl;

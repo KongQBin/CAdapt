@@ -1,6 +1,7 @@
 #include "OperInterp.h"
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <sys/types.h>
 #include <dirent.h>
 #include <fcntl.h>
@@ -107,6 +108,88 @@ bool OperInterp::showTargets(const string& path)
     return showInterpreterForFile(path);
 }
 
+namespace {
+
+// 同目录临时文件的守卫：提交（rename）前析构会关闭 fd 并删除临时文件。
+struct TempFileGuard {
+    int fd;
+    std::string path;
+    bool committed;
+    TempFileGuard() : fd(-1), committed(false) {}
+    ~TempFileGuard()
+    {
+        if (fd >= 0) close(fd);
+        if (!committed && !path.empty()) unlink(path.c_str());
+    }
+};
+
+bool copyFileTo(int srcFd, int dstFd)
+{
+    char buffer[65536];
+    while (true)
+    {
+        ssize_t n = read(srcFd, buffer, sizeof(buffer));
+        if (n < 0)
+        {
+            if (errno == EINTR) continue;
+            return false;
+        }
+        if (n == 0) return true;
+        ssize_t off = 0;
+        while (off < n)
+        {
+            ssize_t w = write(dstFd, buffer + off, static_cast<size_t>(n - off));
+            if (w < 0)
+            {
+                if (errno == EINTR) continue;
+                return false;
+            }
+            off += w;
+        }
+    }
+}
+
+bool fsyncDirectory(const std::string& filePath)
+{
+    const size_t slash = filePath.find_last_of('/');
+    const std::string dir = slash == std::string::npos ? "." : filePath.substr(0, slash + 1);
+    const int dirFd = open(dir.c_str(), O_RDONLY);
+    if (dirFd < 0) return false;
+    const bool ok = fsync(dirFd) == 0;
+    close(dirFd);
+    return ok;
+}
+
+} // namespace
+
+bool OperInterp::verifyInterpreter(const std::string& path, const std::string& expected) const
+{
+    ElfPtrs verify(ElfOpenMode::ReadOnly);
+    if (!verify.initPtrs(path))
+    {
+        ErrorLog::getErrorLog()->putErrInfo("写入后重读验证失败", path);
+        return false;
+    }
+    Elf64_Phdr* verified = verify.findProgramHeader(PT_INTERP);
+    if (!verified || std::string(reinterpret_cast<const char*>(verify.elf_hdr) + verified->p_offset) != expected)
+    {
+        ErrorLog::getErrorLog()->putErrInfo("写入后验证：解释器与预期不符", path);
+        return false;
+    }
+    // LOAD 段的 p_offset 与 p_vaddr 对 p_align 取模必须相等，否则加载器可能拒绝加载。
+    for (unsigned i = 0; i < verify.elf_hdr->e_phnum; ++i)
+    {
+        const Elf64_Phdr& seg = verify.ph[i];
+        if (seg.p_type == PT_LOAD && seg.p_align > 1 &&
+            seg.p_offset % seg.p_align != seg.p_vaddr % seg.p_align)
+        {
+            ErrorLog::getErrorLog()->putErrInfo("写入后验证：LOAD 段偏移与虚址不对齐", path);
+            return false;
+        }
+    }
+    return true;
+}
+
 bool OperInterp::setInterpreterForFile(const string& path, const string& newInterp, bool dryRun)
 {
     unique_ptr<ElfPtrs> targetPtrs(new ElfPtrs(ElfOpenMode::ReadWrite));
@@ -135,14 +218,7 @@ bool OperInterp::setInterpreterForFile(const string& path, const string& newInte
     const size_t oldLen = oldCopy.size();
     const size_t newLen = newInterp.size();
 
-    // 第一阶段硬限制：新路径（含结尾 NUL）必须放进原段，剩余字节补零。
-    if (newLen + 1 > interp->p_filesz)
-    {
-        ErrorLog::getErrorLog()->putErrInfo(
-            string("新解释器过长，第一阶段只支持等长或更短：新长度 ") + to_string(newLen) +
-            "，原段容量 " + to_string(interp->p_filesz - 1), path);
-        return false;
-    }
+    // 长度分流在校验与试运行之后：更长的新路径走文件重写，见下文。
     if (newInterp == oldCopy)
     {
         cout << "  未改动（解释器已是目标值）: " << oldCopy << "  文件:" << path << endl;
@@ -153,9 +229,17 @@ bool OperInterp::setInterpreterForFile(const string& path, const string& newInte
 
     if (dryRun)
     {
-        cout << "  试运行，将修改 " << oldCopy << " ----> " << newInterp
-             << "  文件:" << path << endl;
+        cout << "  试运行，将修改 " << oldCopy << " ----> " << newInterp;
+        if (newLen + 1 > interp->p_filesz) cout << "（新路径更长，需重写文件）";
+        cout << "  文件:" << path << endl;
         return true;
+    }
+
+    // 新路径更长时走文件重写；原地改写无法容纳。此时尚未写入任何内容。
+    if (newLen + 1 > interp->p_filesz)
+    {
+        targetPtrs.reset();
+        return rewriteWithLongerInterpreter(path, newInterp, oldCopy);
     }
 
     char* interpStr = base + interp->p_offset;
@@ -183,20 +267,141 @@ bool OperInterp::setInterpreterForFile(const string& path, const string& newInte
 
     printf("  修改解释器: %-27s ----> %-27s  文件:%s\n", oldCopy.c_str(), newInterp.c_str(), path.c_str());
     if (!targetPtrs->flush()) return false;
+    return verifyInterpreter(path, newInterp);
+}
 
-    // 写盘后重读验证：确认磁盘上的值确实是新解释器。
-    ElfPtrs verify(ElfOpenMode::ReadOnly);
-    if (!verify.initPtrs(path))
+bool OperInterp::rewriteWithLongerInterpreter(const string& path, const string& newInterp, const string& oldInterp)
+{
+    // 重写是 rename 替换，会换 inode：符号链接目标会被替换成本体，必须拒绝。
+    struct stat st;
+    if (lstat(path.c_str(), &st) != 0)
     {
-        ErrorLog::getErrorLog()->putErrInfo("写入后重读验证失败", path);
+        ErrorLog::getErrorLog()->putErrInfo("获取目标状态失败", path);
         return false;
     }
-    Elf64_Phdr* verified = verify.findProgramHeader(PT_INTERP);
-    if (!verified || string(reinterpret_cast<const char*>(verify.elf_hdr) + verified->p_offset) != newInterp)
+    if (S_ISLNK(st.st_mode))
     {
-        ErrorLog::getErrorLog()->putErrInfo("写入后验证：解释器与预期不符", path);
+        ErrorLog::getErrorLog()->putErrInfo("更长解释器需要重写文件，不支持符号链接目标", path);
         return false;
     }
+    if (!S_ISREG(st.st_mode))
+    {
+        ErrorLog::getErrorLog()->putErrInfo("目标不是普通文件", path);
+        return false;
+    }
+    const Elf64_Xword oldSize = static_cast<Elf64_Xword>(st.st_size);
+    const size_t newLen = newInterp.size();
+    // 新串追加到文件末尾：其余内容与全部偏移保持不动，PT_INTERP 与
+    // .interp 节区改指向新位置。内核直接按 PT_INTERP 的文件偏移读
+    // 解释器路径，不要求它落在某个 LOAD 段内。
+    const Elf64_Xword newSize = oldSize + static_cast<Elf64_Xword>(newLen + 1);
+
+    // 复制到同目录临时文件并扩容；rename 之前任何失败都删临时文件，原文件不动。
+    TempFileGuard tmp;
+    tmp.path = path + ".cadapt-XXXXXX";
+    tmp.fd = mkstemp(&tmp.path[0]);
+    if (tmp.fd < 0)
+    {
+        ErrorLog::getErrorLog()->putErrInfo("创建临时文件失败", path);
+        return false;
+    }
+    const int srcFd = open(path.c_str(), O_RDONLY);
+    if (srcFd < 0 || !copyFileTo(srcFd, tmp.fd))
+    {
+        if (srcFd >= 0) close(srcFd);
+        ErrorLog::getErrorLog()->putErrInfo("复制原文件失败", path);
+        return false;
+    }
+    close(srcFd);
+    if (ftruncate(tmp.fd, static_cast<off_t>(newSize)) != 0)
+    {
+        ErrorLog::getErrorLog()->putErrInfo("扩展临时文件失败", path);
+        return false;
+    }
+    if (fchmod(tmp.fd, st.st_mode & 07777) != 0)
+    {
+        ErrorLog::getErrorLog()->putErrInfo("设置临时文件权限失败", path);
+        return false;
+    }
+    const int chownRc = fchown(tmp.fd, st.st_uid, st.st_gid);
+    (void)chownRc;
+    const struct timespec times[2] = { st.st_atim, st.st_mtim };
+    const int utimeRc = futimens(tmp.fd, times);
+    (void)utimeRc;
+    close(tmp.fd);
+    tmp.fd = -1;
+
+    {
+        unique_ptr<ElfPtrs> tmpPtrs(new ElfPtrs(ElfOpenMode::ReadWrite));
+        if (!tmpPtrs->initPtrs(tmp.path))
+        {
+            ErrorLog::getErrorLog()->putErrInfo("初始化临时文件失败", path);
+            return false;
+        }
+        char* base = reinterpret_cast<char*>(tmpPtrs->elf_hdr);
+        Elf64_Phdr* interp = tmpPtrs->findProgramHeader(PT_INTERP);
+        if (!interp)
+        {
+            ErrorLog::getErrorLog()->putErrInfo("目标没有 PT_INTERP", path);
+            return false;
+        }
+        // 写新串到文件末尾，并改指 PT_INTERP。
+        memcpy(base + oldSize, newInterp.c_str(), newLen + 1);
+        interp->p_offset = oldSize;
+        interp->p_filesz = static_cast<Elf64_Xword>(newLen + 1);
+        // .interp 节区改指新位置（sh_addr 仍指向旧位置，只改偏移与大小，以 PT_INTERP 为准）。
+        TableInfo* tb_interp = tmpPtrs->getTableInfo(".interp");
+        if (tb_interp)
+        {
+            tb_interp->addr->sh_offset = oldSize;
+            tb_interp->addr->sh_size = static_cast<Elf64_Xword>(newLen + 1);
+        }
+        if (!tmpPtrs->flush())
+        {
+            ErrorLog::getErrorLog()->putErrInfo("同步临时文件失败", path);
+            return false;
+        }
+    }
+    if (!verifyInterpreter(tmp.path, newInterp))
+    {
+        ErrorLog::getErrorLog()->putErrInfo("重写后验证临时文件失败", path);
+        return false;
+    }
+    {
+        // .interp 节区内容也应是新串（若节区存在）。
+        ElfPtrs check(ElfOpenMode::ReadOnly);
+        if (!check.initPtrs(tmp.path))
+        {
+            ErrorLog::getErrorLog()->putErrInfo("重写后重读临时文件失败", path);
+            return false;
+        }
+        TableInfo* tb_interp = check.getTableInfo(".interp");
+        if (tb_interp)
+        {
+            const char* sectionStr = reinterpret_cast<const char*>(check.elf_hdr) + tb_interp->addr->sh_offset;
+            if (string(sectionStr) != newInterp)
+            {
+                ErrorLog::getErrorLog()->putErrInfo("重写后验证：.interp 节区与预期不符", path);
+                return false;
+            }
+        }
+    }
+
+    if (rename(tmp.path.c_str(), path.c_str()) != 0)
+    {
+        ErrorLog::getErrorLog()->putErrInfo("替换原文件失败", path);
+        return false;
+    }
+    tmp.committed = true;
+    (void)fsyncDirectory(path);
+
+    if (!verifyInterpreter(path, newInterp))
+    {
+        ErrorLog::getErrorLog()->putErrInfo("替换后验证失败", path);
+        return false;
+    }
+    printf("  修改解释器（重写文件，增长 %llu 字节）: %-27s ----> %s  文件:%s\n",
+           static_cast<unsigned long long>(newLen + 1), oldInterp.c_str(), newInterp.c_str(), path.c_str());
     return true;
 }
 
