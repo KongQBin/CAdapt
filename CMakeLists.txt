@@ -17,7 +17,7 @@ endfunction()
 
 add_executable(cadapt
     main.cpp OperGlibc.cpp OperKmod.cpp OperInterp.cpp OperRpath.cpp
-    common/ElfPtrs.cpp common/ErrorLog.cpp
+    common/ElfPtrs.cpp common/ErrorLog.cpp common/ElfUtils.cpp
     kmod/Common.cpp kmod/ElfSymInfos.cpp kmod/ExistingModInfo.cpp kmod/KSymInfos.cpp
 )
 cadapt_configure_target(cadapt)

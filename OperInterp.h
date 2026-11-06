@@ -27,8 +27,6 @@ public:
     bool showTargets(const std::string& path);
 
 private:
-    bool getAllElf(const char *dir);
-    int isElf(const char *file) const; // 1: ELF，0: 非ELF，-1: 读取失败。
     // 1: 有 PT_INTERP，0: 有效 ELF 但无 PT_INTERP，-1: 不是有效 ELF。
     int hasInterpreter(const std::string& path) const;
 
@@ -41,6 +39,4 @@ private:
     // 写之前校验新解释器：绝对路径、存在且为普通文件、64 位小端 ET_DYN、
     // 与目标 e_machine 一致、本身没有 PT_INTERP（真正的 ld.so 不需要解释器）。
     bool validateNewInterpreter(const std::string& newInterp, Elf64_Half targetMachine) const;
-
-    std::vector<std::string> targetElf_vct;
 };

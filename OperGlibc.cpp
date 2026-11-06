@@ -1,14 +1,13 @@
 #include "OperGlibc.h"
+#include "ElfUtils.h"
 #include <string.h>
 #include <stdio.h>
 #include <sys/types.h>
-#include <dirent.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <set>
 #include <utility>
-#include <cerrno>
 
 using namespace std;
 
@@ -116,22 +115,19 @@ void OperGlibc::showGlibcInfo(bool showDynsym) const
 
 bool OperGlibc::adaptedTargets(const string& path)
 {
-    DIR *dir = opendir(path.c_str());
-    if(dir)
+    if (ElfUtils::isDirectory(path))
     {
-        closedir(dir);
-        targetElf_vct.clear();
-        if (!getAllElf(path.c_str())) return false;
+        vector<string> files;
+        if (!ElfUtils::collectElfFiles(path, files)) return false;
 
-        bool success = !targetElf_vct.empty();
-        for(const auto& str : targetElf_vct)
+        bool success = !files.empty();
+        for (const auto& str : files)
         {
             if (!adaptedTargetElfFileGlibcVersion(str)) success = false;
         }
         return success;
     }
-    else
-        return adaptedTargetElfFileGlibcVersion(path);
+    return adaptedTargetElfFileGlibcVersion(path);
 }
 
 void OperGlibc::clearContainer()
@@ -141,86 +137,7 @@ void OperGlibc::clearContainer()
     validIndexAndId_vct.clear();
 }
 
-bool OperGlibc::getAllElf(const char *dir)
-{
-    DIR *d;
-    struct dirent *file;
-    struct stat sb;
-    string filePath;
 
-    if(!(d = opendir(dir)))
-    {
-        ErrorLog::getErrorLog()->putErrInfo("扫描目录失败", dir);
-        return false;
-    }
-    bool success = true;
-    while(true)
-    {
-        errno = 0;
-        file = readdir(d);
-        if (!file)
-        {
-            if (errno != 0)
-            {
-                ErrorLog::getErrorLog()->putErrInfo("读取目录失败", dir);
-                success = false;
-            }
-            break;
-        }
-        if(strcmp(file->d_name, ".") == 0 || strcmp(file->d_name, "..") == 0)
-            continue;
-        filePath = string(dir) + "/" + file->d_name;
-        if(lstat(filePath.c_str(), &sb) >= 0)
-        {
-            if(S_ISLNK(sb.st_mode)) continue;
-            if(S_ISDIR(sb.st_mode))
-            {
-                if (!getAllElf(filePath.c_str())) success = false;
-            }
-            else if(S_ISREG(sb.st_mode))
-            {
-                const int result = isElf(filePath.c_str());
-                if (result < 0) success = false;
-                else if (result > 0)
-                    targetElf_vct.push_back(filePath);
-            }
-        }
-        else
-        {
-            ErrorLog::getErrorLog()->putErrInfo("读取目录项状态失败", filePath);
-            success = false;
-        }
-    }
-    closedir(d);
-    return success;
-}
-
-int OperGlibc::isElf(const char *file) const
-{
-    bool ret = false;
-    const char elfHead[7] = {0x7f,0x45,0x4c,0x46,0x02,0x01,0x01};
-    char targetHead[7] = { 0 };
-    int fd = 0;
-
-    fd = open(file, O_RDONLY);
-    if(fd < 0)
-    {
-        ErrorLog::getErrorLog()->putErrInfo("扫描时打开文件失败", file);
-        return -1;
-    }
-
-    const ssize_t bytes = read(fd,targetHead,sizeof(targetHead));
-    if(bytes < 0)
-    {
-        close(fd);
-        ErrorLog::getErrorLog()->putErrInfo("扫描时读取文件失败", file);
-        return -1;
-    }
-    if(static_cast<size_t>(bytes) == sizeof(targetHead))
-        if(memcmp(elfHead,targetHead,sizeof(targetHead)) == 0) ret = true;
-    close(fd);
-    return ret;
-}
 
 bool OperGlibc::adaptedTargetElfFileGlibcVersion(const string& path)
 {

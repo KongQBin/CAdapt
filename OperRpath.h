@@ -38,8 +38,6 @@ private:
         std::string value;       // 当前 RPATH 值（不含结尾 NUL）
     };
 
-    bool getAllElf(const char *dir);
-    int isElf(const char *file) const; // 1: ELF，0: 非ELF，-1: 读取失败。
     // 1: 有 RPATH，0: 有效 ELF 但无 RPATH，-1: 不是有效 ELF。
     int hasRpath(const std::string& path) const;
     // 解析优先改的那一项（有 RUNPATH 改 RUNPATH，否则改 RPATH）；无则 false。
@@ -54,6 +52,4 @@ private:
     bool showRpathForFile(const std::string& path) const;
     // 写盘后重读验证：解析出的值与预期一致。
     bool verifyRpath(const std::string& path, const std::string& expected) const;
-
-    std::vector<std::string> targetElf_vct;
 };
