@@ -24,6 +24,7 @@ int ElfPtrs::reject(const std::string& reason)
     ErrorLog::getErrorLog()->putErrInfo(reason, m_filePath);
     if (elf_hdr && elf_hdr != MAP_FAILED) munmap(elf_hdr, m_st.st_size);
     elf_hdr = nullptr;
+    ph = nullptr;
     sh = nullptr;
     sh_str = nullptr;
     strtab = nullptr;
@@ -44,6 +45,7 @@ ElfPtrs::~ElfPtrs()
         if(m_mode == ElfOpenMode::ReadWrite && !m_flushAttempted) flush();
         munmap(reinterpret_cast<void*>(elf_hdr), m_st.st_size);
         elf_hdr = nullptr;
+        ph = nullptr;
     }
 }
 
@@ -118,6 +120,21 @@ int ElfPtrs::initPtrs(const std::string &path)
         (elf_hdr->e_type != ET_REL && elf_hdr->e_type != ET_EXEC && elf_hdr->e_type != ET_DYN))
         return reject("不支持或无效的ELF文件头（需要64位小端ELF）");
 
+    // 程序头表：e_phnum 为 0（如 ET_REL / .ko）时不要求存在；否则先校验表范围
+    // 与内容，再继续校验节头表。旧流程只看节头，带伪造 e_phoff 的文件本可绕过。
+    if (elf_hdr->e_phnum == PN_XNUM)
+        return reject("ELF程序头数量使用扩展编号，不受支持");
+    if (elf_hdr->e_phnum)
+    {
+        if (elf_hdr->e_phentsize != sizeof(Elf64_Phdr) ||
+            elf_hdr->e_phoff < sizeof(Elf64_Ehdr) || elf_hdr->e_phoff % alignof(Elf64_Phdr) ||
+            !inRange(elf_hdr->e_phoff, Elf64_Xword(elf_hdr->e_phnum) * sizeof(Elf64_Phdr), fileSize))
+            return reject("ELF程序头表越界或不受支持");
+        ph = reinterpret_cast<Elf64_Phdr *>((char *)elf_hdr + elf_hdr->e_phoff);
+        if (!validateProgramHeaders())
+            return reject("ELF程序头内容无效");
+    }
+
     // 暂不支持扩展节区编号；拒绝而不是使用未校验的索引。
     if (!elf_hdr->e_shnum || elf_hdr->e_shstrndx == SHN_UNDEF ||
         elf_hdr->e_shstrndx >= elf_hdr->e_shnum ||
@@ -184,6 +201,43 @@ int ElfPtrs::initPtrs(const std::string &path)
     if (!validateTables()) return reject("ELF符号表或版本节区内容无效");
     // 各业务流程自行检查所需节区；内核模块没有 GLIBC 版本节区。
     return 1;
+}
+
+bool ElfPtrs::validateProgramHeaders() const
+{
+    const char* base = reinterpret_cast<const char*>(elf_hdr);
+    const Elf64_Xword fileSize = static_cast<Elf64_Xword>(m_st.st_size);
+    unsigned interpCount = 0;
+    unsigned dynamicCount = 0;
+    for (unsigned i = 0; i < elf_hdr->e_phnum; ++i)
+    {
+        const Elf64_Phdr& segment = ph[i];
+        if (segment.p_filesz &&
+            !inRange(segment.p_offset, segment.p_filesz, fileSize))
+            return false;
+        if (segment.p_type == PT_INTERP)
+        {
+            if (++interpCount > 1) return false;
+            // 解释器路径必须在文件内以 NUL 结尾；长度至少能放 "/x\0"。
+            if (segment.p_filesz < 3 ||
+                !memchr(base + segment.p_offset, '\0', segment.p_filesz))
+                return false;
+        }
+        else if (segment.p_type == PT_DYNAMIC)
+        {
+            if (++dynamicCount > 1) return false;
+            if (segment.p_filesz % sizeof(Elf64_Dyn) != 0) return false;
+        }
+    }
+    return true;
+}
+
+Elf64_Phdr* ElfPtrs::findProgramHeader(Elf64_Word type)
+{
+    if (!ph) return nullptr;
+    for (unsigned i = 0; i < elf_hdr->e_phnum; ++i)
+        if (ph[i].p_type == type) return ph + i;
+    return nullptr;
 }
 
 bool ElfPtrs::validateTables() const

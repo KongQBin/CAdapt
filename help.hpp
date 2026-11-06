@@ -35,6 +35,13 @@ inline void print_help(const char* prog_name)
         std::cout << "  -c, --libc <path>     必需。指定提供符号表的GLIBC(libc.so.6)文件位置。" << std::endl;
         std::cout << "  -t, --target <path>   必需。指定要适配GLIBC版本及符号表的ELF文件/所在目录。" << std::endl;
         std::cout << std::endl;
+        std::cout << "【动态链接器(解释器)适配选项】" << std::endl;
+        std::cout << "  -i, --interp <path>   必需(与 -p 二选一)。指定新的动态链接器绝对路径。" << std::endl;
+        std::cout << "                        第一阶段只支持等长或更短的路径，更长路径会被拒绝且不修改文件。" << std::endl;
+        std::cout << "  -p, --print-interp    只查看目标的当前解释器，不修改文件。" << std::endl;
+        std::cout << "      --dry-run         与 -i 联用时只打印将要做的修改，不写文件。" << std::endl;
+        std::cout << "  -t, --target <path>   必需。指定要修改解释器的ELF文件/所在目录。" << std::endl;
+        std::cout << std::endl;
         std::cout << "【内核模块(ko) 适配选项】" << std::endl;
         std::cout << "  -m, --kmod <path>     必需。指定要修改的内核模块(.ko)文件位置。" << std::endl;
         std::cout << "  -s, --symvers <path>  可选。指定内核符号版本文件(Module.symvers)的位置。若不指定，将从当前运行系统中提取。" << std::endl;
@@ -45,6 +52,8 @@ inline void print_help(const char* prog_name)
         std::cout << std::endl;
         std::cout << "Example:" << std::endl;
         std::cout << "  GLIBC适配: " << prog_name << " -c /lib64/libc.so.6 -t ./my_program" << std::endl;
+        std::cout << "  解释器适配: " << prog_name << " -i /lib64/ld-linux-x86-64.so.2 -t ./my_program" << std::endl;
+        std::cout << "  查看解释器: " << prog_name << " -p -t ./my_program" << std::endl;
         std::cout << "  KMOD适配:  " << prog_name << " -m ./my_driver.ko -s ./Module.symvers -v \"4.18.0-193.el8.x86_64 SMP mod_unload\"" << std::endl;
     }
     else
@@ -52,6 +61,13 @@ inline void print_help(const char* prog_name)
         std::cout << "[GLIBC Adaptation Options]" << std::endl;
         std::cout << "  -c, --libc <path>     Required. Path to the GLIBC (libc.so.6) file providing the symbol table." << std::endl;
         std::cout << "  -t, --target <path>   Required. Path to the ELF file or directory to adapt GLIBC versions and symbols." << std::endl;
+        std::cout << std::endl;
+        std::cout << "[Dynamic Linker (Interpreter) Adaptation Options]" << std::endl;
+        std::cout << "  -i, --interp <path>   Required (either -i or -p). Absolute path of the new dynamic linker." << std::endl;
+        std::cout << "                        Phase 1 only supports a path of equal or shorter length; a longer path is rejected without modifying the file." << std::endl;
+        std::cout << "  -p, --print-interp    Show the target's current interpreter without modifying the file." << std::endl;
+        std::cout << "      --dry-run         With -i, only print the planned change without writing the file." << std::endl;
+        std::cout << "  -t, --target <path>   Required. Path to the ELF file or directory whose interpreter is to be changed." << std::endl;
         std::cout << std::endl;
         std::cout << "[Kernel Module (.ko) Adaptation Options]" << std::endl;
         std::cout << "  -m, --kmod <path>     Required. Path to the target kernel module (.ko) file to modify." << std::endl;
@@ -63,6 +79,8 @@ inline void print_help(const char* prog_name)
         std::cout << std::endl;
         std::cout << "Example:" << std::endl;
         std::cout << "  GLIBC Adaptation: " << prog_name << " -c /lib64/libc.so.6 -t ./my_program" << std::endl;
+        std::cout << "  Interpreter Adaptation: " << prog_name << " -i /lib64/ld-linux-x86-64.so.2 -t ./my_program" << std::endl;
+        std::cout << "  Show Interpreter: " << prog_name << " -p -t ./my_program" << std::endl;
         std::cout << "  KMOD Adaptation:  " << prog_name << " -m ./my_driver.ko -s ./Module.symvers -v \"4.18.0-193.el8.x86_64 SMP mod_unload\"" << std::endl;
     }
 }
