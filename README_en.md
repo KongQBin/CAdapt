@@ -15,6 +15,7 @@ CAdapt patches ELF metadata on Linux to adjust symbol version requirements in co
 
 - **GLIBC**: Read symbol versions from a supplied `libc.so.6` and adapt one ELF file or a directory. Keep the original version when available and preserve hidden symbol markers.
 - **KMOD**: Modify `.ko` `vermagic` and symbol CRCs in the traditional `__versions` format.
+- **32-bit and multiple candidates**: Both 32-bit and 64-bit little-endian ELF files are supported. `-c` (libc) and `-i` (interpreter) may be repeated (e.g. one 32-bit and one 64-bit each); every target picks the matching candidate by class, endianness and machine, so a directory may mix both. A target with no matching libc/interpreter is warned about and skipped; big-endian ELF files are not yet supported and are warned about and skipped. 32-bit kernel modules use 4-byte CRCs in `__versions`; when a target module's machine differs from the running system while symbol CRCs or `vermagic` come from that system, the change is warned about and refused.
 
 ## Build and test
 
@@ -39,6 +40,10 @@ The language standard is fixed to **GNU++11**. `CADAPT_STRICT=ON` treats compile
 # KMOD
 ./build/cadapt -m ./my_driver.ko -s ./Module.symvers \
   -v "4.18.0-193.el8.x86_64 SMP mod_unload"
+
+# Mixed directory: 32-bit and 64-bit targets each match their own libc/interpreter
+./build/cadapt -c /lib/libc.so.6 -c /lib64/libc.so.6 -t ./mixed_dir
+./build/cadapt -i /lib/ld-linux.so.2 -i /lib64/ld-linux-x86-64.so.2 -t ./mixed_dir
 ```
 
 ### Options and behavior
@@ -60,7 +65,7 @@ This records AI-assisted review and observed test results; it is not an official
 
 ## Supported formats and risks
 
-- Supports **64-bit little-endian ELF with section headers**. ELF32, big-endian files and extended section numbering are unsupported.
+- Supports **32-bit and 64-bit little-endian ELF with section headers**. Big-endian files and extended section numbering are unsupported.
 - Extended KMOD sections `__version_ext_names` / `__version_ext_crcs` are explicitly rejected.
 - Files are modified in place: back them up first. Metadata changes cannot check or repair ABI differences; applications may still crash and incompatible kernel modules may cause Kernel Panic/Oops.
 - Errors go to `cadaptErrlog.txt` beside the executable, or stderr if the log cannot be written.

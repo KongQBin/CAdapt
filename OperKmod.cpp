@@ -1,35 +1,64 @@
 #include "OperKmod.h"
+#include "ElfUtils.h"
+#include <iostream>
 #include <vector>
-ElfModify::ElfModify(string mod) :
+
+template <typename Traits>
+ElfModify<Traits>::ElfModify(string mod) :
     m_einfo(mod,ElfOpenMode::ReadWrite)
 {
 
 }
 
-ElfModify::ElfModify(string symver, string mod) :
+template <typename Traits>
+ElfModify<Traits>::ElfModify(string symver, string mod) :
     m_kinfo(symver), m_einfo(mod,ElfOpenMode::ReadWrite)
 {
 
 }
 
-ElfModify::~ElfModify()
+template <typename Traits>
+ElfModify<Traits>::~ElfModify()
 {
 
 }
 
-ExistingModInfo& ElfModify::systemInfo()
+template <typename Traits>
+ExistingModInfo& ElfModify<Traits>::systemInfo()
 {
     if (!m_minfo) m_minfo.reset(new ExistingModInfo());
     return *m_minfo;
 }
 
-bool ElfModify::motify(string vermagic)
+template <typename Traits>
+bool ElfModify<Traits>::motify(string vermagic)
 {
     if (!m_einfo.isValid() || !m_kinfo.isValid()) return false;
+
+    // 系统来源的符号 CRC 或 vermagic 只对本机内核的模块有效：目标模块
+    // 的架构与当前系统不一致时，系统值不能用，警告并拒绝修改（文件不
+    // 动）。显式同时提供 -s 与 -v 时不走系统来源，不做此检查。
+    const bool usesSystemCrc = !m_kinfo.hasSource();
+    const bool usesSystemVermagic = vermagic.empty();
+    if (usesSystemCrc || usesSystemVermagic)
+    {
+        const unsigned short host = systemInfo().hostMachine();
+        const unsigned short target = m_einfo.machine();
+        if (host != 0 && target != 0 && host != target)
+        {
+            const std::string message = "警告：目标模块架构（" + ElfUtils::machineName(target) +
+                "）与当前系统（" + ElfUtils::machineName(host) +
+                "）不一致，系统提供的符号 CRC/vermagic 可能不适用，拒绝修改";
+            std::cerr << message << std::endl;
+            ErrorLog::getErrorLog()->putErrInfo(message, m_einfo.getFilePath());
+            return false;
+        }
+    }
+
     bool ret = true;
     // 先记录所有修改；检查完成前不写入共享映射。
-    vector<pair<modversion_info*, unsigned long>> patches;
-    map<string, modversion_info *> *vinfo = m_einfo.getVInfo();
+    vector<pair<ModVersionInfo<Traits>*, unsigned long>> patches;
+    map<string, ModVersionInfo<Traits> *> *vinfo = m_einfo.getVInfo();
     for(auto it = vinfo->begin(); it != vinfo->end(); ++it)
     {
         unsigned long crc = 0;
@@ -83,7 +112,7 @@ bool ElfModify::motify(string vermagic)
 
     for (const auto& patch : patches)
     {
-        printf("modify symbol %-32s crc %lu to %lu\n", patch.first->name, patch.first->crc, patch.second);
+        printf("modify symbol %-32s crc %lu to %lu\n", patch.first->name, (unsigned long)patch.first->crc, patch.second);
         patch.first->crc = patch.second;
     }
     const size_t capacity = strlen(vIndex);
@@ -92,3 +121,7 @@ bool ElfModify::motify(string vermagic)
     printf("modify ver str magic to %s\n", vIndex);
     return m_einfo.flush();
 }
+
+// 显式实例化：main.cpp 只通过声明使用这两个实例化，定义集中在此。
+template class ElfModify<Elf64Traits>;
+template class ElfModify<Elf32Traits>;

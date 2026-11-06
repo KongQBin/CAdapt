@@ -9,16 +9,17 @@
 
 using namespace std;
 
-bool OperRpath::resolveEntries(ElfPtrs& ptrs, vector<RpathEntry>& entries) const
+template <typename Traits>
+bool OperRpath::resolveEntries(ElfPtrs<Traits>& ptrs, vector<RpathEntry<Traits>>& entries) const
 {
     entries.clear();
-    Elf64_Phdr* dynamic = ptrs.findProgramHeader(PT_DYNAMIC);
+    typename Traits::Phdr* dynamic = ptrs.findProgramHeader(PT_DYNAMIC);
     if (!dynamic) return false;
     const char* base = reinterpret_cast<const char*>(ptrs.elf_hdr);
-    const Elf64_Dyn* dyn = reinterpret_cast<const Elf64_Dyn*>(base + dynamic->p_offset);
-    const size_t count = dynamic->p_filesz / sizeof(Elf64_Dyn);
-    const Elf64_Dyn* runpath = nullptr;
-    const Elf64_Dyn* rpath = nullptr;
+    const typename Traits::Dyn* dyn = reinterpret_cast<const typename Traits::Dyn*>(base + dynamic->p_offset);
+    const size_t count = dynamic->p_filesz / sizeof(typename Traits::Dyn);
+    const typename Traits::Dyn* runpath = nullptr;
+    const typename Traits::Dyn* rpath = nullptr;
     for (size_t i = 0; i < count; ++i)
     {
         if (dyn[i].d_tag == DT_RUNPATH) runpath = &dyn[i];
@@ -26,22 +27,22 @@ bool OperRpath::resolveEntries(ElfPtrs& ptrs, vector<RpathEntry>& entries) const
         else if (dyn[i].d_tag == DT_NULL) break;
     }
     if (!runpath && !rpath) return false;
-    TableInfo* tb_dynstr = ptrs.getTableInfo(".dynstr");
+    TableInfo<Traits>* tb_dynstr = ptrs.getTableInfo(".dynstr");
     if (!tb_dynstr) return false;
     // RUNPATH 在前：它是优先改的那一项。
-    const Elf64_Dyn* chosen[2] = { runpath, rpath };
+    const typename Traits::Dyn* chosen[2] = { runpath, rpath };
     for (int k = 0; k < 2; ++k)
     {
-        const Elf64_Dyn* item = chosen[k];
+        const typename Traits::Dyn* item = chosen[k];
         if (!item) continue;
-        const Elf64_Xword strOff = item->d_un.d_val;
+        const typename Traits::Xword strOff = item->d_un.d_val;
         if (strOff >= tb_dynstr->addr->sh_size) return false;
         const char* str = base + tb_dynstr->addr->sh_offset + strOff;
         const size_t maxLen = tb_dynstr->addr->sh_size - static_cast<size_t>(strOff);
         const char* nul = static_cast<const char*>(memchr(str, '\0', maxLen));
         if (!nul) return false;
-        RpathEntry entry;
-        entry.tag = static_cast<Elf64_Word>(item->d_tag);
+        RpathEntry<Traits> entry;
+        entry.tag = static_cast<typename Traits::Word>(item->d_tag);
         entry.strOffset = strOff;
         entry.fileOffset = tb_dynstr->addr->sh_offset + strOff;
         entry.value.assign(str, static_cast<size_t>(nul - str));
@@ -50,20 +51,63 @@ bool OperRpath::resolveEntries(ElfPtrs& ptrs, vector<RpathEntry>& entries) const
     return !entries.empty();
 }
 
-bool OperRpath::resolveEntry(ElfPtrs& ptrs, RpathEntry& entry) const
+template <typename Traits>
+bool OperRpath::resolveEntry(ElfPtrs<Traits>& ptrs, RpathEntry<Traits>& entry) const
 {
-    vector<RpathEntry> entries;
+    vector<RpathEntry<Traits>> entries;
     if (!resolveEntries(ptrs, entries)) return false;
     entry = entries.front();
     return true;
 }
 
+template <typename Traits>
 int OperRpath::hasRpath(const string& path) const
 {
-    ElfPtrs ptrs(ElfOpenMode::ReadOnly);
+    ElfPtrs<Traits> ptrs(ElfOpenMode::ReadOnly);
     if (!ptrs.initPtrs(path.c_str())) return -1;
-    RpathEntry entry;
+    RpathEntry<Traits> entry;
     return resolveEntry(ptrs, entry) ? 1 : 0;
+}
+
+template <typename Traits>
+bool OperRpath::verifyRpath(const string& path, const string& expected) const
+{
+    ElfPtrs<Traits> verify(ElfOpenMode::ReadOnly);
+    if (!verify.initPtrs(path))
+    {
+        ErrorLog::getErrorLog()->putErrInfo("写入后重读验证失败", path);
+        return false;
+    }
+    RpathEntry<Traits> entry;
+    if (!resolveEntry(verify, entry) || entry.value != expected)
+    {
+        ErrorLog::getErrorLog()->putErrInfo("写入后验证：RPATH 与预期不符", path);
+        return false;
+    }
+    return true;
+}
+
+template <typename Traits>
+bool OperRpath::showRpathForFile(const string& path) const
+{
+    ElfPtrs<Traits> ptrs(ElfOpenMode::ReadOnly);
+    if (!ptrs.initPtrs(path.c_str()))
+    {
+        ErrorLog::getErrorLog()->putErrInfo("initTargetPtrs失败", path);
+        return false;
+    }
+    vector<RpathEntry<Traits>> entries;
+    if (!resolveEntries(ptrs, entries))
+    {
+        ErrorLog::getErrorLog()->putErrInfo("目标没有 DT_RPATH/DT_RUNPATH", path);
+        return false;
+    }
+    for (const auto& entry : entries)
+    {
+        const char* tagName = entry.tag == DT_RUNPATH ? "RUNPATH" : "RPATH";
+        cout << path << ": " << tagName << "=" << entry.value << endl;
+    }
+    return true;
 }
 
 bool OperRpath::validateNewRpath(const string& newRpath) const
@@ -81,11 +125,12 @@ bool OperRpath::validateNewRpath(const string& newRpath) const
     return true;
 }
 
+template <typename Traits>
 bool OperRpath::setRpathForFile(const string& path, const string& newRpath, bool dryRun)
 {
-    RpathEntry entry;
+    RpathEntry<Traits> entry;
     {
-        ElfPtrs inspect(ElfOpenMode::ReadOnly);
+        ElfPtrs<Traits> inspect(ElfOpenMode::ReadOnly);
         if (!inspect.initPtrs(path.c_str()))
         {
             ErrorLog::getErrorLog()->putErrInfo("initTargetPtrs失败", path);
@@ -125,13 +170,13 @@ bool OperRpath::setRpathForFile(const string& path, const string& newRpath, bool
         return true;
     }
 
-    unique_ptr<ElfPtrs> targetPtrs(new ElfPtrs(ElfOpenMode::ReadWrite));
+    unique_ptr<ElfPtrs<Traits>> targetPtrs(new ElfPtrs<Traits>(ElfOpenMode::ReadWrite));
     if (!targetPtrs->initPtrs(path.c_str()))
     {
         ErrorLog::getErrorLog()->putErrInfo("initTargetPtrs失败", path);
         return false;
     }
-    RpathEntry live;
+    RpathEntry<Traits> live;
     if (!resolveEntry(*targetPtrs, live))
     {
         ErrorLog::getErrorLog()->putErrInfo("目标没有 DT_RPATH/DT_RUNPATH", path);
@@ -146,46 +191,72 @@ bool OperRpath::setRpathForFile(const string& path, const string& newRpath, bool
     printf("  修改 RPATH (%s): %-27s ----> %-27s  文件:%s\n",
            tagName, entry.value.c_str(), newRpath.c_str(), path.c_str());
     if (!targetPtrs->flush()) return false;
-    return verifyRpath(path, newRpath);
+    return verifyRpath<Traits>(path, newRpath);
 }
 
-bool OperRpath::verifyRpath(const string& path, const string& expected) const
+template <typename Traits>
+FileAdaptResult OperRpath::adaptOneFileFor(const string& path, const string& newRpath, bool dryRun)
 {
-    ElfPtrs verify(ElfOpenMode::ReadOnly);
-    if (!verify.initPtrs(path))
+    const int has = hasRpath<Traits>(path);
+    if (has < 0)
     {
-        ErrorLog::getErrorLog()->putErrInfo("写入后重读验证失败", path);
-        return false;
+        ErrorLog::getErrorLog()->putErrInfo("目标不是有效的 ELF 文件", path);
+        return FileAdaptResult::Failed;
     }
-    RpathEntry entry;
-    if (!resolveEntry(verify, entry) || entry.value != expected)
+    if (has == 0)
     {
-        ErrorLog::getErrorLog()->putErrInfo("写入后验证：RPATH 与预期不符", path);
-        return false;
+        cout << "  跳过（无 RPATH）: " << path << endl;
+        return FileAdaptResult::Skipped;
     }
-    return true;
+    return setRpathForFile<Traits>(path, newRpath, dryRun)
+        ? FileAdaptResult::Patched : FileAdaptResult::Failed;
 }
 
-bool OperRpath::showRpathForFile(const string& path) const
+template <typename Traits>
+FileAdaptResult OperRpath::showOneFileFor(const string& path) const
 {
-    ElfPtrs ptrs(ElfOpenMode::ReadOnly);
-    if (!ptrs.initPtrs(path.c_str()))
+    const int has = hasRpath<Traits>(path);
+    if (has < 0) return FileAdaptResult::Failed;
+    if (has == 0)
     {
-        ErrorLog::getErrorLog()->putErrInfo("initTargetPtrs失败", path);
-        return false;
+        cout << "  跳过（无 RPATH）: " << path << endl;
+        return FileAdaptResult::Skipped;
     }
-    vector<RpathEntry> entries;
-    if (!resolveEntries(ptrs, entries))
+    return showRpathForFile<Traits>(path) ? FileAdaptResult::Patched : FileAdaptResult::Failed;
+}
+
+FileAdaptResult OperRpath::adaptOneFile(const string& path, const string& newRpath, bool dryRun)
+{
+    ElfIdentity id;
+    if (!ElfUtils::identifyElf(path, id))
     {
-        ErrorLog::getErrorLog()->putErrInfo("目标没有 DT_RPATH/DT_RUNPATH", path);
-        return false;
+        ElfUtils::logIdentifyFailure(path);
+        return FileAdaptResult::Failed;
     }
-    for (const auto& entry : entries)
+    if (id.elfData == ELFDATA2MSB)
     {
-        const char* tagName = entry.tag == DT_RUNPATH ? "RUNPATH" : "RPATH";
-        cout << path << ": " << tagName << "=" << entry.value << endl;
+        ElfUtils::warnUnsupportedEndian(path, id);
+        return FileAdaptResult::Skipped;
     }
-    return true;
+    if (id.elfClass == ELFCLASS64) return adaptOneFileFor<Elf64Traits>(path, newRpath, dryRun);
+    return adaptOneFileFor<Elf32Traits>(path, newRpath, dryRun);
+}
+
+FileAdaptResult OperRpath::showOneFile(const string& path) const
+{
+    ElfIdentity id;
+    if (!ElfUtils::identifyElf(path, id))
+    {
+        ElfUtils::logIdentifyFailure(path);
+        return FileAdaptResult::Failed;
+    }
+    if (id.elfData == ELFDATA2MSB)
+    {
+        ElfUtils::warnUnsupportedEndian(path, id);
+        return FileAdaptResult::Skipped;
+    }
+    if (id.elfClass == ELFCLASS64) return showOneFileFor<Elf64Traits>(path);
+    return showOneFileFor<Elf32Traits>(path);
 }
 
 bool OperRpath::adaptTargets(const string& path, const string& newRpath, bool dryRun)
@@ -200,20 +271,9 @@ bool OperRpath::adaptTargets(const string& path, const string& newRpath, bool dr
         bool success = true;
         for (const auto& file : files)
         {
-            const int has = hasRpath(file);
-            if (has < 0)
-            {
-                ErrorLog::getErrorLog()->putErrInfo("目录中有无效 ELF 文件", file);
-                success = false;
-                continue;
-            }
-            if (has == 0)
-            {
-                cout << "  跳过（无 RPATH）: " << file << endl;
-                ++skipped;
-                continue;
-            }
-            if (setRpathForFile(file, newRpath, dryRun)) ++patched;
+            const FileAdaptResult result = adaptOneFile(file, newRpath, dryRun);
+            if (result == FileAdaptResult::Patched) ++patched;
+            else if (result == FileAdaptResult::Skipped) ++skipped;
             else success = false;
         }
         if (patched == 0)
@@ -224,7 +284,7 @@ bool OperRpath::adaptTargets(const string& path, const string& newRpath, bool dr
         (void)skipped;
         return success;
     }
-    return setRpathForFile(path, newRpath, dryRun);
+    return adaptOneFile(path, newRpath, dryRun) == FileAdaptResult::Patched;
 }
 
 bool OperRpath::showTargets(const string& path)
@@ -237,15 +297,11 @@ bool OperRpath::showTargets(const string& path)
         unsigned printed = 0;
         for (const auto& file : files)
         {
-            const int has = hasRpath(file);
-            if (has < 0) success = false;
-            else if (has == 0) cout << "  跳过（无 RPATH）: " << file << endl;
-            else if (showRpathForFile(file)) ++printed;
-            else success = false;
+            const FileAdaptResult result = showOneFile(file);
+            if (result == FileAdaptResult::Patched) ++printed;
+            else if (result == FileAdaptResult::Failed) success = false;
         }
         return success && printed > 0;
     }
-    return showRpathForFile(path);
+    return showOneFile(path) == FileAdaptResult::Patched;
 }
-
-

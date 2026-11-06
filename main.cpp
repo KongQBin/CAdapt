@@ -1,22 +1,36 @@
 #include <iostream>
 #include <cstring>
 #include <string>
+#include <memory>
 #include <getopt.h>
 #include "OperGlibc.h"
 #include "OperKmod.h"
 #include "OperInterp.h"
 #include "OperRpath.h"
+#include "ElfUtils.h"
 #include "help.hpp"
 
 using namespace std;
+
+// 内核模块按目标的 ELF 类别分发到对应的模板实例；定义在 OperKmod.cpp
+// 中显式实例化，这里只通过声明调用。
+template <typename Traits>
+bool runKmod(const std::string& kmodPath, const std::string& symversPath, const std::string& vermagic)
+{
+    std::unique_ptr<ElfModify<Traits>> modifier;
+    if (symversPath.empty()) modifier.reset(new ElfModify<Traits>(kmodPath));
+    else modifier.reset(new ElfModify<Traits>(symversPath, kmodPath));
+    return modifier->motify(vermagic);
+}
+
 int main(int argc, char **argv)
 {
-    string libc_path;
+    vector<string> libc_paths;
     string target_path;
     string kmod_path;
     string symvers_path;
     string vermagic_str;
-    string interp_path;
+    vector<string> interp_paths;
     bool print_interp = false;
     string rpath_value;
     bool set_rpath = false;
@@ -52,7 +66,7 @@ int main(int argc, char **argv)
             show_help = true;
             break;
         case 'c':
-            libc_path = optarg;
+            libc_paths.push_back(optarg);
             break;
         case 't':
             target_path = optarg;
@@ -67,7 +81,7 @@ int main(int argc, char **argv)
             vermagic_str = optarg;
             break;
         case 'i':
-            interp_path = optarg;
+            interp_paths.push_back(optarg);
             break;
         case 'p':
             print_interp = true;
@@ -97,9 +111,11 @@ int main(int argc, char **argv)
 
     // 判断用户想要执行的任务类型。-t 由 GLIBC 与解释器两种模式共用，
     // 因此不能仅凭 -t 推断为 GLIBC 模式；只给 -t 时在下面按缺少模式报错。
-    bool run_glibc = !libc_path.empty();
+    // -c 与 -i 均可重复指定（如同时给 32 位与 64 位的 libc/解释器），
+    // 每个目标按类别、字节序、机器架构挑选匹配的候选。
+    bool run_glibc = !libc_paths.empty();
     bool run_kmod  = !kmod_path.empty();
-    bool run_interp = !interp_path.empty() || print_interp;
+    bool run_interp = !interp_paths.empty() || print_interp;
     bool run_rpath = set_rpath || print_rpath;
 
     if (!show_help && !run_glibc && !run_kmod && !run_interp && !run_rpath) {
@@ -110,14 +126,17 @@ int main(int argc, char **argv)
 
     // 校验 GLIBC 参数
     if (!show_help && run_glibc) {
-        if (libc_path.empty() || target_path.empty()) {
+        if (libc_paths.empty() || target_path.empty()) {
             cerr << "错误：对于GLIBC适配，--libc 和 --target 都是必需参数。" << endl;
             show_help = true;
             argument_error = true;
-        } else if (libc_path.find("libc.so") == string::npos) {
-            cerr << "错误：--libc 参数 \"" << libc_path << "\" 似乎不是一个有效的 libc.so 文件。" << endl;
-            show_help = true;
-            argument_error = true;
+        }
+        for (const auto& libc : libc_paths) {
+            if (libc.find("libc.so") == string::npos) {
+                cerr << "错误：--libc 参数 \"" << libc << "\" 似乎不是一个有效的 libc.so 文件。" << endl;
+                show_help = true;
+                argument_error = true;
+            }
         }
     }
 
@@ -127,7 +146,7 @@ int main(int argc, char **argv)
             cerr << "错误：对于解释器适配，--target 是必需参数。" << endl;
             show_help = true;
             argument_error = true;
-        } else if (print_interp && !interp_path.empty()) {
+        } else if (print_interp && !interp_paths.empty()) {
             cerr << "错误：--print-interp 不能与 --interp 同时使用。" << endl;
             show_help = true;
             argument_error = true;
@@ -135,10 +154,13 @@ int main(int argc, char **argv)
             cerr << "错误：--print-interp 不能与 --dry-run 同时使用。" << endl;
             show_help = true;
             argument_error = true;
-        } else if (!interp_path.empty() && interp_path[0] != '/') {
-            cerr << "错误：--interp 参数 \"" << interp_path << "\" 必须是绝对路径。" << endl;
-            show_help = true;
-            argument_error = true;
+        }
+        for (const auto& interp : interp_paths) {
+            if (!interp.empty() && interp[0] != '/') {
+                cerr << "错误：--interp 参数 \"" << interp << "\" 必须是绝对路径。" << endl;
+                show_help = true;
+                argument_error = true;
+            }
         }
     }
 
@@ -170,12 +192,11 @@ int main(int argc, char **argv)
     // ================== GLIBC 符号适配 ==================
     if (run_glibc) {
         cout << "============== GLIBC 适配 ==============" << endl;
-        cout << "GLIBC 路径: " << libc_path << endl;
+        for (const auto& libc : libc_paths) cout << "GLIBC 路径: " << libc << endl;
         cout << "目标 路径: " << target_path << endl;
 
         OperGlibc localVersion;
-        localVersion.initGlibcInfo(libc_path);
-        if (!localVersion.adaptedTargets(target_path)) {
+        if (!localVersion.adaptedTargets(target_path, libc_paths)) {
             cerr << "GLIBC 适配失败，请检查日志。" << endl;
             return 1;
         }
@@ -188,7 +209,7 @@ int main(int argc, char **argv)
         if (run_glibc) cout << endl; // 空行分隔
         cout << "============== 动态链接器 适配 ==============" << endl;
         cout << "目标 路径: " << target_path << endl;
-        if (!interp_path.empty()) cout << "新解释器: " << interp_path << endl;
+        for (const auto& interp : interp_paths) cout << "新解释器: " << interp << endl;
         if (dry_run) cout << "试运行模式，不修改文件。" << endl;
 
         OperInterp operInterp;
@@ -196,7 +217,7 @@ int main(int argc, char **argv)
         if (print_interp) {
             success = operInterp.showTargets(target_path);
         } else {
-            success = operInterp.adaptTargets(target_path, interp_path, dry_run);
+            success = operInterp.adaptTargets(target_path, interp_paths, dry_run);
         }
         if (!success) {
             cerr << "动态链接器适配失败，请检查日志。" << endl;
@@ -241,21 +262,27 @@ int main(int argc, char **argv)
         if (!symvers_path.empty()) cout << "符号文件(Symvers): " << symvers_path << endl;
         if (!vermagic_str.empty()) cout << "目标版本魔术(Vermagic): " << vermagic_str << endl;
 
-        // 根据是否提供了 Module.symvers 文件选择不同的构造函数
-        ElfModify* modifier = nullptr;
-        if (!symvers_path.empty()) {
-            modifier = new ElfModify(symvers_path, kmod_path);
-        } else {
-            modifier = new ElfModify(kmod_path);
+        // 根据是否提供了 Module.symvers 文件选择不同的构造函数。
+        // 目标模块按 ELF 类别分发；大端模块直接警告并拒绝。
+        ElfIdentity kmodId;
+        bool success = false;
+        if (!ElfUtils::identifyElf(kmod_path, kmodId)) {
+            cerr << "错误：目标模块不是有效的 ELF 文件。" << endl;
+            return 1;
         }
-
-        const bool success = modifier->motify(vermagic_str);
+        if (kmodId.elfData == ELFDATA2MSB) {
+            ElfUtils::warnUnsupportedEndian(kmod_path, kmodId);
+            return 1;
+        }
+        if (kmodId.elfClass == ELFCLASS64)
+            success = runKmod<Elf64Traits>(kmod_path, symvers_path, vermagic_str);
+        else
+            success = runKmod<Elf32Traits>(kmod_path, symvers_path, vermagic_str);
         if (success) {
             cout << "内核模块适配成功。" << endl;
         } else {
             cerr << "内核模块适配过程中存在失败项，请检查日志。" << endl;
         }
-        delete modifier;
         if (!success) return 1;
     }
 
