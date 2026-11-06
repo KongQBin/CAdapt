@@ -36,7 +36,7 @@ if(BUILD_TESTING)
     if(NOT python_version_status EQUAL 0)
         message(FATAL_ERROR "Tests need Python 3.7+")
     endif()
-    foreach(suite cli glibc kmod elf_validation io system_modules logging interp rpath)
+    foreach(suite cli glibc kmod elf_validation io system_modules logging interp rpath elf32)
         add_test(NAME ${suite}_regression
             COMMAND ${PYTHON3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/${suite}_regression.py $<TARGET_FILE:cadapt>)
         set_tests_properties(${suite}_regression PROPERTIES TIMEOUT 180 RUN_SERIAL TRUE)

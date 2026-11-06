@@ -15,6 +15,7 @@ CAdapt 是面向 Linux 的 ELF 中繼資料修補工具，可調整已編譯程�
 
 - **GLIBC**：讀取指定 `libc.so.6` 的符號版本，適配單一 ELF 或目錄；原版本可用時優先保留，保留符號隱藏標記。
 - **KMOD**：修改 `.ko` 的 `vermagic` 與傳統 `__versions` 格式的符號 CRC。
+- **32 位元與多候選**：支援 32 位元與 64 位元小端序 ELF。`-c`（libc）與 `-i`（直譯器）皆可重複指定（如 32 位元與 64 位元各一），每個目標依類別、位元組序、機器架構挑選相符的候選；目錄可同時包含兩種檔案。指定的 libc／直譯器與目標不相符時會警告並略過該檔案；大端序 ELF 暫不支援，會警告並略過。32 位元核心模組的 `__versions` 項目使用 4 位元組 CRC；目標模組架構與目前系統不一致、而符號 CRC 或 `vermagic` 又取自目前系統時，會警告並拒絕修改。
 
 ## 建置與檢查
 
@@ -39,6 +40,10 @@ ctest --test-dir build --output-on-failure
 # KMOD
 ./build/cadapt -m ./my_driver.ko -s ./Module.symvers \
   -v "4.18.0-193.el8.x86_64 SMP mod_unload"
+
+# 混合目錄：32 位元與 64 位元目標各自對應自己的 libc／直譯器
+./build/cadapt -c /lib/libc.so.6 -c /lib64/libc.so.6 -t ./mixed_dir
+./build/cadapt -i /lib/ld-linux.so.2 -i /lib64/ld-linux-x86-64.so.2 -t ./mixed_dir
 ```
 
 ### 參數與行為
@@ -60,7 +65,7 @@ ctest --test-dir build --output-on-failure
 
 ## 支援範圍與風險
 
-- 目前支援帶節標頭表的 **64 位元小端序 ELF**；不支援 32 位元、大端序或擴充節區編號。
+- 目前支援帶節標頭表的 **32 位元與 64 位元小端序 ELF**；不支援大端序或擴充節區編號。
 - 擴充 KMOD 節區 `__version_ext_names`／`__version_ext_crcs` 會明確拒絕修改。
 - 工具直接修改原檔，請先備份。僅修改中繼資料，無法檢查或修復 ABI 差異；程式仍可能當機，不相容核心模組可能引發 Kernel Panic/Oops。
 - 錯誤日誌寫入執行檔目錄下的 `cadaptErrlog.txt`；日誌無法寫入時會輸出至 stderr。

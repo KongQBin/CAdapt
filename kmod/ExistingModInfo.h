@@ -17,6 +17,8 @@ public:
     std::string getVermagic();
     bool findSym(const std::string& symname, unsigned long& crc) const;
     bool isValid() const { return m_valid; }
+    // 当前系统（uname -m）对应的 e_machine；无法确认时返回 0。
+    unsigned short hostMachine() const;
 private:
     // 查询系统中正在使用的内核模块
     bool queryKMods();

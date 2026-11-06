@@ -8,18 +8,20 @@
 #include <set>
 
 namespace {
-bool inRange(Elf64_Xword offset, Elf64_Xword length, Elf64_Xword size)
+// 偏移/长度统一按 64 位比较：32 位文件的字段值（32 位宽）隐式提升后仍正确。
+bool inRange(uint64_t offset, uint64_t length, uint64_t size)
 {
     return offset <= size && length <= size - offset;
 }
 
-bool validString(const char* strings, Elf64_Xword size, Elf64_Xword offset)
+bool validString(const char* strings, uint64_t size, uint64_t offset)
 {
     return offset < size && memchr(strings + offset, '\0', size - offset);
 }
 }
 
-int ElfPtrs::reject(const std::string& reason)
+template <typename Traits>
+int ElfPtrs<Traits>::reject(const std::string& reason)
 {
     ErrorLog::getErrorLog()->putErrInfo(reason, m_filePath);
     if (elf_hdr && elf_hdr != MAP_FAILED) munmap(elf_hdr, m_st.st_size);
@@ -32,13 +34,15 @@ int ElfPtrs::reject(const std::string& reason)
     return 0;
 }
 
-ElfPtrs::ElfPtrs(ElfOpenMode mode, bool debug)
+template <typename Traits>
+ElfPtrs<Traits>::ElfPtrs(ElfOpenMode mode, bool debug)
     : m_mode(mode), m_debug(debug)
 {
 
 }
 
-ElfPtrs::~ElfPtrs()
+template <typename Traits>
+ElfPtrs<Traits>::~ElfPtrs()
 {
     if(elf_hdr != MAP_FAILED && elf_hdr != nullptr)
     {
@@ -49,7 +53,8 @@ ElfPtrs::~ElfPtrs()
     }
 }
 
-bool ElfPtrs::flush()
+template <typename Traits>
+bool ElfPtrs<Traits>::flush()
 {
     if (!elf_hdr || elf_hdr == MAP_FAILED) return false;
     if (m_mode == ElfOpenMode::ReadOnly) return true;
@@ -62,7 +67,8 @@ bool ElfPtrs::flush()
     return true;
 }
 
-int ElfPtrs::initPtrs(const std::string &path)
+template <typename Traits>
+int ElfPtrs<Traits>::initPtrs(const std::string &path)
 {
     if(elf_hdr) return 0;
     m_flushAttempted = false;
@@ -93,14 +99,14 @@ int ElfPtrs::initPtrs(const std::string &path)
         return 0;
     }
 
-    if (!S_ISREG(m_st.st_mode) || m_st.st_size < static_cast<off_t>(sizeof(Elf64_Ehdr)) ||
+    if (!S_ISREG(m_st.st_mode) || m_st.st_size < static_cast<off_t>(sizeof(typename Traits::Ehdr)) ||
         static_cast<uintmax_t>(m_st.st_size) > std::numeric_limits<size_t>::max())
     {
         close(fd);
         return reject("ELF文件不是普通文件或文件头不完整");
     }
 
-    elf_hdr = reinterpret_cast<Elf64_Ehdr *>(mmap(0, m_st.st_size, mmapProt, mmapFlags, fd, 0));
+    elf_hdr = reinterpret_cast<typename Traits::Ehdr *>(mmap(0, m_st.st_size, mmapProt, mmapFlags, fd, 0));
 
     if (elf_hdr == MAP_FAILED)
     {
@@ -111,14 +117,16 @@ int ElfPtrs::initPtrs(const std::string &path)
     }
     close(fd);
 
-    const Elf64_Xword fileSize = m_st.st_size;
+    const uint64_t fileSize = m_st.st_size;
     if (memcmp(elf_hdr->e_ident, ELFMAG, SELFMAG) != 0 ||
-        elf_hdr->e_ident[EI_CLASS] != ELFCLASS64 ||
+        elf_hdr->e_ident[EI_CLASS] != Traits::elfClass ||
         elf_hdr->e_ident[EI_DATA] != ELFDATA2LSB ||
         elf_hdr->e_ident[EI_VERSION] != EV_CURRENT || elf_hdr->e_version != EV_CURRENT ||
-        elf_hdr->e_ehsize != sizeof(Elf64_Ehdr) ||
+        elf_hdr->e_ehsize != sizeof(typename Traits::Ehdr) ||
         (elf_hdr->e_type != ET_REL && elf_hdr->e_type != ET_EXEC && elf_hdr->e_type != ET_DYN))
-        return reject("不支持或无效的ELF文件头（需要64位小端ELF）");
+        return reject(Traits::elfClass == ELFCLASS64
+            ? "不支持或无效的ELF文件头（需要64位小端ELF）"
+            : "不支持或无效的ELF文件头（需要32位小端ELF）");
 
     // 程序头表：e_phnum 为 0（如 ET_REL / .ko）时不要求存在；否则先校验表范围
     // 与内容，再继续校验节头表。旧流程只看节头，带伪造 e_phoff 的文件本可绕过。
@@ -126,11 +134,11 @@ int ElfPtrs::initPtrs(const std::string &path)
         return reject("ELF程序头数量使用扩展编号，不受支持");
     if (elf_hdr->e_phnum)
     {
-        if (elf_hdr->e_phentsize != sizeof(Elf64_Phdr) ||
-            elf_hdr->e_phoff < sizeof(Elf64_Ehdr) || elf_hdr->e_phoff % alignof(Elf64_Phdr) ||
-            !inRange(elf_hdr->e_phoff, Elf64_Xword(elf_hdr->e_phnum) * sizeof(Elf64_Phdr), fileSize))
+        if (elf_hdr->e_phentsize != sizeof(typename Traits::Phdr) ||
+            elf_hdr->e_phoff < sizeof(typename Traits::Ehdr) || elf_hdr->e_phoff % alignof(typename Traits::Phdr) ||
+            !inRange(elf_hdr->e_phoff, uint64_t(elf_hdr->e_phnum) * sizeof(typename Traits::Phdr), fileSize))
             return reject("ELF程序头表越界或不受支持");
-        ph = reinterpret_cast<Elf64_Phdr *>((char *)elf_hdr + elf_hdr->e_phoff);
+        ph = reinterpret_cast<typename Traits::Phdr *>((char *)elf_hdr + elf_hdr->e_phoff);
         if (!validateProgramHeaders())
             return reject("ELF程序头内容无效");
     }
@@ -138,16 +146,16 @@ int ElfPtrs::initPtrs(const std::string &path)
     // 暂不支持扩展节区编号；拒绝而不是使用未校验的索引。
     if (!elf_hdr->e_shnum || elf_hdr->e_shstrndx == SHN_UNDEF ||
         elf_hdr->e_shstrndx >= elf_hdr->e_shnum ||
-        elf_hdr->e_shentsize != sizeof(Elf64_Shdr) ||
-        elf_hdr->e_shoff < sizeof(Elf64_Ehdr) || elf_hdr->e_shoff % alignof(Elf64_Shdr) ||
-        !inRange(elf_hdr->e_shoff, Elf64_Xword(elf_hdr->e_shnum) * sizeof(Elf64_Shdr), fileSize))
+        elf_hdr->e_shentsize != sizeof(typename Traits::Shdr) ||
+        elf_hdr->e_shoff < sizeof(typename Traits::Ehdr) || elf_hdr->e_shoff % alignof(typename Traits::Shdr) ||
+        !inRange(elf_hdr->e_shoff, uint64_t(elf_hdr->e_shnum) * sizeof(typename Traits::Shdr), fileSize))
         return reject("ELF节头表越界或节区编号不受支持");
 
-    sh = reinterpret_cast<Elf64_Shdr *>((char *)elf_hdr + elf_hdr->e_shoff);
+    sh = reinterpret_cast<typename Traits::Shdr *>((char *)elf_hdr + elf_hdr->e_shoff);
     sh_str = sh + elf_hdr->e_shstrndx;
     for (unsigned i = 0; i < elf_hdr->e_shnum; ++i)
     {
-        const Elf64_Shdr& table = sh[i];
+        const typename Traits::Shdr& table = sh[i];
         if (table.sh_link >= elf_hdr->e_shnum ||
             (table.sh_type != SHT_NOBITS && !inRange(table.sh_offset, table.sh_size, fileSize)))
             return reject("ELF节区范围或关联索引越界");
@@ -172,7 +180,7 @@ int ElfPtrs::initPtrs(const std::string &path)
     // 遍历节头表，统一采用 TableInfo 形式进行存储
     for (int i = 1; i < elf_hdr->e_shnum; i++)
     {
-        TableInfo info;
+        TableInfo<Traits> info;
         info.addr = sh + i;
         info.name = strtab + info.addr->sh_name;
         if ((info.name == ".dynsym" || info.name == ".dynstr" || info.name == ".gnu.version" ||
@@ -203,15 +211,16 @@ int ElfPtrs::initPtrs(const std::string &path)
     return 1;
 }
 
-bool ElfPtrs::validateProgramHeaders() const
+template <typename Traits>
+bool ElfPtrs<Traits>::validateProgramHeaders() const
 {
     const char* base = reinterpret_cast<const char*>(elf_hdr);
-    const Elf64_Xword fileSize = static_cast<Elf64_Xword>(m_st.st_size);
+    const uint64_t fileSize = static_cast<uint64_t>(m_st.st_size);
     unsigned interpCount = 0;
     unsigned dynamicCount = 0;
     for (unsigned i = 0; i < elf_hdr->e_phnum; ++i)
     {
-        const Elf64_Phdr& segment = ph[i];
+        const typename Traits::Phdr& segment = ph[i];
         if (segment.p_filesz &&
             !inRange(segment.p_offset, segment.p_filesz, fileSize))
             return false;
@@ -226,13 +235,14 @@ bool ElfPtrs::validateProgramHeaders() const
         else if (segment.p_type == PT_DYNAMIC)
         {
             if (++dynamicCount > 1) return false;
-            if (segment.p_filesz % sizeof(Elf64_Dyn) != 0) return false;
+            if (segment.p_filesz % sizeof(typename Traits::Dyn) != 0) return false;
         }
     }
     return true;
 }
 
-Elf64_Phdr* ElfPtrs::findProgramHeader(Elf64_Word type)
+template <typename Traits>
+typename Traits::Phdr* ElfPtrs<Traits>::findProgramHeader(typename Traits::Word type)
 {
     if (!ph) return nullptr;
     for (unsigned i = 0; i < elf_hdr->e_phnum; ++i)
@@ -240,12 +250,13 @@ Elf64_Phdr* ElfPtrs::findProgramHeader(Elf64_Word type)
     return nullptr;
 }
 
-bool ElfPtrs::validateTables() const
+template <typename Traits>
+bool ElfPtrs<Traits>::validateTables() const
 {
     const char* base = reinterpret_cast<const char*>(elf_hdr);
     for (unsigned i = 1; i < elf_hdr->e_shnum; ++i)
     {
-        const Elf64_Shdr& table = sh[i];
+        const typename Traits::Shdr& table = sh[i];
         const std::string name = strtab + table.sh_name;
         if ((name == ".dynsym" && table.sh_type != SHT_DYNSYM) ||
             (name == ".dynstr" && table.sh_type != SHT_STRTAB) ||
@@ -254,25 +265,26 @@ bool ElfPtrs::validateTables() const
             (name == ".gnu.version_d" && table.sh_type != SHT_GNU_verdef) ||
             ((name == ".modinfo" || name == "__versions") && table.sh_type != SHT_PROGBITS))
             return false;
-        if (name == "__versions" && table.sh_offset % alignof(unsigned long)) return false;
+        // __versions 条目按目标类别对齐：32 位 4 字节，64 位 8 字节。
+        if (name == "__versions" && table.sh_offset % alignof(typename Traits::Addr)) return false;
         if (table.sh_type == SHT_DYNSYM || table.sh_type == SHT_SYMTAB)
         {
-            if (table.sh_offset % alignof(Elf64_Sym) || table.sh_entsize != sizeof(Elf64_Sym) ||
-                table.sh_size % sizeof(Elf64_Sym) || sh[table.sh_link].sh_type != SHT_STRTAB)
+            if (table.sh_offset % alignof(typename Traits::Sym) || table.sh_entsize != sizeof(typename Traits::Sym) ||
+                table.sh_size % sizeof(typename Traits::Sym) || sh[table.sh_link].sh_type != SHT_STRTAB)
                 return false;
-            const Elf64_Shdr& strings = sh[table.sh_link];
-            const Elf64_Sym* symbols = reinterpret_cast<const Elf64_Sym*>(base + table.sh_offset);
-            for (size_t j = 0; j < table.sh_size / sizeof(Elf64_Sym); ++j)
+            const typename Traits::Shdr& strings = sh[table.sh_link];
+            const typename Traits::Sym* symbols = reinterpret_cast<const typename Traits::Sym*>(base + table.sh_offset);
+            for (size_t j = 0; j < table.sh_size / sizeof(typename Traits::Sym); ++j)
                 if (!validString(base + strings.sh_offset, strings.sh_size, symbols[j].st_name)) return false;
             if (name == ".dynsym" && std::string(strtab + strings.sh_name) != ".dynstr") return false;
         }
         if (table.sh_type == SHT_GNU_versym)
         {
-            const Elf64_Shdr& symbols = sh[table.sh_link];
-            if (table.sh_offset % alignof(Elf64_Half) || table.sh_entsize != sizeof(Elf64_Half) ||
-                table.sh_size % sizeof(Elf64_Half) || symbols.sh_type != SHT_DYNSYM ||
-                symbols.sh_entsize != sizeof(Elf64_Sym) ||
-                table.sh_size / sizeof(Elf64_Half) != symbols.sh_size / sizeof(Elf64_Sym)) return false;
+            const typename Traits::Shdr& symbols = sh[table.sh_link];
+            if (table.sh_offset % alignof(typename Traits::Half) || table.sh_entsize != sizeof(typename Traits::Half) ||
+                table.sh_size % sizeof(typename Traits::Half) || symbols.sh_type != SHT_DYNSYM ||
+                symbols.sh_entsize != sizeof(typename Traits::Sym) ||
+                table.sh_size / sizeof(typename Traits::Half) != symbols.sh_size / sizeof(typename Traits::Sym)) return false;
             if (name == ".gnu.version" && std::string(strtab + symbols.sh_name) != ".dynsym") return false;
         }
         if ((table.sh_type == SHT_GNU_verdef || table.sh_type == SHT_GNU_verneed) &&
@@ -281,53 +293,54 @@ bool ElfPtrs::validateTables() const
     return validateVersionIndices();
 }
 
-bool ElfPtrs::validateVersions(const Elf64_Shdr& table) const
+template <typename Traits>
+bool ElfPtrs<Traits>::validateVersions(const typename Traits::Shdr& table) const
 {
-    const Elf64_Shdr& strings = sh[table.sh_link];
+    const typename Traits::Shdr& strings = sh[table.sh_link];
     if (strings.sh_type != SHT_STRTAB || std::string(strtab + strings.sh_name) != ".dynstr" ||
-        table.sh_offset % alignof(Elf64_Word) || !table.sh_info) return false;
+        table.sh_offset % alignof(typename Traits::Word) || !table.sh_info) return false;
     const char* base = reinterpret_cast<const char*>(elf_hdr);
     const char* data = base + table.sh_offset;
     const bool definition = table.sh_type == SHT_GNU_verdef;
-    const size_t headerSize = definition ? sizeof(Elf64_Verdef) : sizeof(Elf64_Verneed);
-    const size_t auxSize = definition ? sizeof(Elf64_Verdaux) : sizeof(Elf64_Vernaux);
+    const size_t headerSize = definition ? sizeof(typename Traits::Verdef) : sizeof(typename Traits::Verneed);
+    const size_t auxSize = definition ? sizeof(typename Traits::Verdaux) : sizeof(typename Traits::Vernaux);
     if (table.sh_info > table.sh_size / headerSize) return false;
-    Elf64_Xword offset = 0;
+    typename Traits::Xword offset = 0;
     for (unsigned record = 0; record < table.sh_info; ++record)
     {
-        if (!inRange(offset, headerSize, table.sh_size) || offset % alignof(Elf64_Word)) return false;
+        if (!inRange(offset, headerSize, table.sh_size) || offset % alignof(typename Traits::Word)) return false;
         unsigned count, aux, next;
         if (definition)
         {
-            const Elf64_Verdef* value = reinterpret_cast<const Elf64_Verdef*>(data + offset);
+            const typename Traits::Verdef* value = reinterpret_cast<const typename Traits::Verdef*>(data + offset);
             if (value->vd_version != VER_DEF_CURRENT) return false;
             count = value->vd_cnt; aux = value->vd_aux; next = value->vd_next;
         }
         else
         {
-            const Elf64_Verneed* value = reinterpret_cast<const Elf64_Verneed*>(data + offset);
+            const typename Traits::Verneed* value = reinterpret_cast<const typename Traits::Verneed*>(data + offset);
             if (value->vn_version != VER_NEED_CURRENT ||
                 !validString(base + strings.sh_offset, strings.sh_size, value->vn_file)) return false;
             count = value->vn_cnt; aux = value->vn_aux; next = value->vn_next;
         }
         if ((record + 1 == table.sh_info) != (next == 0)) return false;
         if (next && (next < headerSize || !inRange(offset, next, table.sh_size))) return false;
-        const Elf64_Xword end = next ? offset + next : table.sh_size;
+        const typename Traits::Xword end = next ? offset + next : table.sh_size;
         if (!count || count > (end - offset) / auxSize || aux < headerSize ||
             !inRange(offset, aux, end)) return false;
-        Elf64_Xword node = offset + aux;
+        typename Traits::Xword node = offset + aux;
         for (unsigned j = 0; j < count; ++j)
         {
-            if (!inRange(node, auxSize, end) || node % alignof(Elf64_Word)) return false;
+            if (!inRange(node, auxSize, end) || node % alignof(typename Traits::Word)) return false;
             unsigned name, step;
             if (definition)
             {
-                const Elf64_Verdaux* value = reinterpret_cast<const Elf64_Verdaux*>(data + node);
+                const typename Traits::Verdaux* value = reinterpret_cast<const typename Traits::Verdaux*>(data + node);
                 name = value->vda_name; step = value->vda_next;
             }
             else
             {
-                const Elf64_Vernaux* value = reinterpret_cast<const Elf64_Vernaux*>(data + node);
+                const typename Traits::Vernaux* value = reinterpret_cast<const typename Traits::Vernaux*>(data + node);
                 name = value->vna_name; step = value->vna_next;
             }
             if (!validString(base + strings.sh_offset, strings.sh_size, name) ||
@@ -340,16 +353,17 @@ bool ElfPtrs::validateVersions(const Elf64_Shdr& table) const
     return true;
 }
 
-bool ElfPtrs::validateVersionIndices() const
+template <typename Traits>
+bool ElfPtrs<Traits>::validateVersionIndices() const
 {
     const char* base = reinterpret_cast<const char*>(elf_hdr);
     std::set<unsigned> known = {0, 1};
     for (unsigned i = 1; i < elf_hdr->e_shnum; ++i)
     {
-        const Elf64_Shdr& table = sh[i];
+        const typename Traits::Shdr& table = sh[i];
         if (table.sh_type == SHT_GNU_verdef)
         {
-            const Elf64_Verdef* value = reinterpret_cast<const Elf64_Verdef*>(base + table.sh_offset);
+            const typename Traits::Verdef* value = reinterpret_cast<const typename Traits::Verdef*>(base + table.sh_offset);
             for (unsigned j = 0; j < table.sh_info; ++j)
             {
                 const unsigned id = value->vd_ndx;
@@ -358,41 +372,43 @@ bool ElfPtrs::validateVersionIndices() const
                     if (id != 1) return false;
                 }
                 else if (id < 2 || id >= 0x8000 || !known.insert(id).second) return false;
-                value = reinterpret_cast<const Elf64_Verdef*>(reinterpret_cast<const char*>(value) + value->vd_next);
+                value = reinterpret_cast<const typename Traits::Verdef*>(reinterpret_cast<const char*>(value) + value->vd_next);
             }
         }
         else if (table.sh_type == SHT_GNU_verneed)
         {
-            const Elf64_Verneed* value = reinterpret_cast<const Elf64_Verneed*>(base + table.sh_offset);
+            const typename Traits::Verneed* value = reinterpret_cast<const typename Traits::Verneed*>(base + table.sh_offset);
             for (unsigned j = 0; j < table.sh_info; ++j)
             {
-                const Elf64_Vernaux* aux = reinterpret_cast<const Elf64_Vernaux*>(reinterpret_cast<const char*>(value) + value->vn_aux);
+                const typename Traits::Vernaux* aux = reinterpret_cast<const typename Traits::Vernaux*>(reinterpret_cast<const char*>(value) + value->vn_aux);
                 for (unsigned k = 0; k < value->vn_cnt; ++k)
                 {
                     const unsigned id = aux->vna_other & 0x7fff;
                     if (id < 2 || !known.insert(id).second) return false;
-                    aux = reinterpret_cast<const Elf64_Vernaux*>(reinterpret_cast<const char*>(aux) + aux->vna_next);
+                    aux = reinterpret_cast<const typename Traits::Vernaux*>(reinterpret_cast<const char*>(aux) + aux->vna_next);
                 }
-                value = reinterpret_cast<const Elf64_Verneed*>(reinterpret_cast<const char*>(value) + value->vn_next);
+                value = reinterpret_cast<const typename Traits::Verneed*>(reinterpret_cast<const char*>(value) + value->vn_next);
             }
         }
     }
     for (unsigned i = 1; i < elf_hdr->e_shnum; ++i)
         if (sh[i].sh_type == SHT_GNU_versym)
         {
-            const Elf64_Half* values = reinterpret_cast<const Elf64_Half*>(base + sh[i].sh_offset);
-            for (size_t j = 0; j < sh[i].sh_size / sizeof(Elf64_Half); ++j)
+            const typename Traits::Half* values = reinterpret_cast<const typename Traits::Half*>(base + sh[i].sh_offset);
+            for (size_t j = 0; j < sh[i].sh_size / sizeof(typename Traits::Half); ++j)
                 if (!known.count(values[j] & 0x7fff)) return false;
         }
     return true;
 }
 
-const std::string ElfPtrs::getFilePath() const
+template <typename Traits>
+const std::string ElfPtrs<Traits>::getFilePath() const
 {
     return m_filePath;
 }
 
-TableInfo* ElfPtrs::getTableInfo(const std::string& name)
+template <typename Traits>
+TableInfo<Traits>* ElfPtrs<Traits>::getTableInfo(const std::string& name)
 {
     auto it = m_tbinfo.find(name);
     if (it != m_tbinfo.end())
@@ -406,3 +422,7 @@ TableInfo* ElfPtrs::getTableInfo(const std::string& name)
     }
     return nullptr;
 }
+
+// 显式实例化：其余翻译单元只通过声明使用这两个实例化，定义集中在此。
+template class ElfPtrs<Elf64Traits>;
+template class ElfPtrs<Elf32Traits>;

@@ -4,6 +4,7 @@
 #include <vector>
 #include <memory>
 #include "ElfPtrs.h"
+#include "ElfUtils.h"
 
 // ELF 运行库搜索路径（DT_RPATH / DT_RUNPATH）适配。
 //
@@ -15,6 +16,10 @@
 // 有空闲槽位可供新增条目）。
 // 若同时存在两项，优先改 DT_RUNPATH（现代链接器默认），只读查看时两
 // 项都会打印；空字符串表示清空。
+//
+// 32 位支持：核心逻辑按 ELF 类别模板化（Elf32Traits/Elf64Traits），
+// 目标文件按类别分发；RPATH 值本身与类别无关，无需多候选。大端文件
+// 暂不支持，警告并跳过。
 class OperRpath
 {
 public:
@@ -30,26 +35,41 @@ public:
 
 private:
     // .dynamic 中 RPATH/RUNPATH 条目的解析结果。
+    template <typename Traits>
     struct RpathEntry
     {
-        Elf64_Word tag;          // DT_RPATH 或 DT_RUNPATH
-        Elf64_Xword strOffset;   // 串在 .dynstr 中的偏移（DT 条目的 d_val）
-        Elf64_Xword fileOffset;  // 串在文件中的偏移
-        std::string value;       // 当前 RPATH 值（不含结尾 NUL）
+        typename Traits::Word tag;        // DT_RPATH 或 DT_RUNPATH
+        typename Traits::Xword strOffset; // 串在 .dynstr 中的偏移（DT 条目的 d_val）
+        typename Traits::Xword fileOffset;// 串在文件中的偏移
+        std::string value;                // 当前 RPATH 值（不含结尾 NUL）
     };
 
+    // 单个文件：识别类别后分发到对应模板实例。
+    FileAdaptResult adaptOneFile(const std::string& path, const std::string& newRpath, bool dryRun);
+    FileAdaptResult showOneFile(const std::string& path) const;
+
     // 1: 有 RPATH，0: 有效 ELF 但无 RPATH，-1: 不是有效 ELF。
+    template <typename Traits>
     int hasRpath(const std::string& path) const;
+    template <typename Traits>
+    FileAdaptResult adaptOneFileFor(const std::string& path, const std::string& newRpath, bool dryRun);
+    template <typename Traits>
+    FileAdaptResult showOneFileFor(const std::string& path) const;
     // 解析优先改的那一项（有 RUNPATH 改 RUNPATH，否则改 RPATH）；无则 false。
-    bool resolveEntry(ElfPtrs& ptrs, RpathEntry& entry) const;
+    template <typename Traits>
+    bool resolveEntry(ElfPtrs<Traits>& ptrs, RpathEntry<Traits>& entry) const;
     // 解析所有 RPATH/RUNPATH 条目（RUNPATH 在前）；无则 false。
-    bool resolveEntries(ElfPtrs& ptrs, std::vector<RpathEntry>& entries) const;
+    template <typename Traits>
+    bool resolveEntries(ElfPtrs<Traits>& ptrs, std::vector<RpathEntry<Traits>>& entries) const;
     // 校验新 RPATH 语法：空串表示清空；每段须为绝对路径或以 $ 开头
     //（$ORIGIN/$LIB/$PLATFORM 等加载器变量）。
     bool validateNewRpath(const std::string& newRpath) const;
 
+    template <typename Traits>
     bool setRpathForFile(const std::string& path, const std::string& newRpath, bool dryRun);
+    template <typename Traits>
     bool showRpathForFile(const std::string& path) const;
     // 写盘后重读验证：解析出的值与预期一致。
+    template <typename Traits>
     bool verifyRpath(const std::string& path, const std::string& expected) const;
 };

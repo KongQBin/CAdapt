@@ -11,43 +11,67 @@
 
 using namespace std;
 
-void OperGlibc::initGlibcInfo(const string& glibcPath)
+namespace {
+
+// 没有与目标匹配的 C 库时的统一警告（终端 + 错误日志）。
+void warnNoMatchingLibc(const std::string& targetPath, const ElfIdentity& targetId,
+                        const std::vector<std::string>& candidates)
 {
-    if(glibcPtrs) return;
-    glibcPtrs.reset(new ElfPtrs(ElfOpenMode::ReadOnly));
-    if(!glibcPtrs->initPtrs(glibcPath.c_str()))
+    std::string message = "警告：没有与目标匹配的 C 库：目标为 " +
+        ElfUtils::describeIdentity(targetId) + "，提供的 C 库为 ";
+    for (size_t i = 0; i < candidates.size(); ++i)
+    {
+        if (i) message += "、";
+        ElfIdentity candidateId;
+        if (ElfUtils::identifyElf(candidates[i], candidateId))
+            message += ElfUtils::describeIdentity(candidateId);
+        else
+            message += "无法识别(" + candidates[i] + ")";
+    }
+    message += "，跳过：" + targetPath;
+    std::cerr << message << std::endl;
+    ErrorLog::getErrorLog()->putErrInfo(message, targetPath);
+}
+
+} // namespace
+
+template <typename Traits>
+bool OperGlibc::parseLibc(const std::string& glibcPath, ParsedLibc& out)
+{
+    ElfPtrs<Traits> glibcPtrs(ElfOpenMode::ReadOnly);
+    if(!glibcPtrs.initPtrs(glibcPath.c_str()))
     {
         ErrorLog::getErrorLog()->putErrInfo("initGlibcPtrs失败", glibcPath);
-        return;
+        return false;
     }
 
     // 获取必需的表信息
-    TableInfo *tb_version_d = glibcPtrs->getTableInfo(".gnu.version_d");
-    TableInfo *tb_dynstr = glibcPtrs->getTableInfo(".dynstr");
-    TableInfo *tb_dynsym = glibcPtrs->getTableInfo(".dynsym");
-    TableInfo *tb_version = glibcPtrs->getTableInfo(".gnu.version");
+    TableInfo<Traits> *tb_version_d = glibcPtrs.getTableInfo(".gnu.version_d");
+    TableInfo<Traits> *tb_dynstr = glibcPtrs.getTableInfo(".dynstr");
+    TableInfo<Traits> *tb_dynsym = glibcPtrs.getTableInfo(".dynsym");
+    TableInfo<Traits> *tb_version = glibcPtrs.getTableInfo(".gnu.version");
 
     if(!tb_version_d || !tb_dynstr || !tb_dynsym || !tb_version)
     {
         ErrorLog::getErrorLog()->putErrInfo("获取Glibc必要节区失败", glibcPath);
-        return;
+        return false;
     }
 
     // 计算实际偏移
-    char* ehdr = reinterpret_cast<char*>(glibcPtrs->elf_hdr);
-    Elf64_Verdef *verdef = reinterpret_cast<Elf64_Verdef*>(ehdr + tb_version_d->addr->sh_offset);
+    char* ehdr = reinterpret_cast<char*>(glibcPtrs.elf_hdr);
+    typename Traits::Verdef *verdef = reinterpret_cast<typename Traits::Verdef*>(ehdr + tb_version_d->addr->sh_offset);
     char *dynstr = ehdr + tb_dynstr->addr->sh_offset;
-    Elf64_Sym *dynsym = reinterpret_cast<Elf64_Sym*>(ehdr + tb_dynsym->addr->sh_offset);
+    typename Traits::Sym *dynsym = reinterpret_cast<typename Traits::Sym*>(ehdr + tb_dynsym->addr->sh_offset);
     unsigned short *versions = reinterpret_cast<unsigned short*>(ehdr + tb_version->addr->sh_offset);
 
-    Elf64_Verdef *next_verdef;
+    typename Traits::Verdef *next_verdef;
     set<string> seenVersions;
 
     for (int last = 0; !last; verdef = next_verdef)
     {
         if(!(verdef->vd_flags & VER_FLG_BASE))
         {
-            Elf64_Verdaux *daux = reinterpret_cast<Elf64_Verdaux*>((char *)verdef + verdef->vd_aux);
+            typename Traits::Verdaux *daux = reinterpret_cast<typename Traits::Verdaux*>((char *)verdef + verdef->vd_aux);
             // 首个辅助项是版本名，其余辅助项为父版本，不应创建新的符号归属。
             {
                 char *name = dynstr + daux->vda_name;
@@ -68,23 +92,24 @@ void OperGlibc::initGlibcInfo(const string& glibcPath)
                                 versionInfo.symbols.push_back(move(s_dynsym));
                         }
                     }
-                    glibcVersionInfo_vct.push_back(move(versionInfo));
+                    out.versions.push_back(move(versionInfo));
                 }
             }
         }
-        next_verdef = reinterpret_cast<Elf64_Verdef*>((char *)verdef + verdef->vd_next);
+        next_verdef = reinterpret_cast<typename Traits::Verdef*>((char *)verdef + verdef->vd_next);
         last = verdef->vd_next == 0;
     }
-    for (const auto& version : glibcVersionInfo_vct)
+    for (const auto& version : out.versions)
     {
-        versionIds[version.name] = version.id;
+        out.versionIds[version.name] = version.id;
         for (const auto& symbol : version.symbols)
-            symbolVersions[symbol].push_back({version.name, version.id});
+            out.symbolVersions[symbol].push_back({version.name, version.id});
     }
-    showGlibcInfo();
+    showGlibcInfo(out);
+    return true;
 }
 
-void OperGlibc::showGlibcInfo(bool showDynsym) const
+void OperGlibc::showGlibcInfo(const ParsedLibc& libc, bool showDynsym)
 {
     const char* reset = "\033[0m";
     const char* bold = "\033[1m";
@@ -95,7 +120,7 @@ void OperGlibc::showGlibcInfo(bool showDynsym) const
     else
         cout << bold << "目标GLIBC所支持的版本如下:" << reset << endl;
 
-    for (const auto& ver : glibcVersionInfo_vct)
+    for (const auto& ver : libc.versions)
     {
         cout << redBold << ver.name << " " << ver.id << reset << endl;
         if(showDynsym)
@@ -113,91 +138,168 @@ void OperGlibc::showGlibcInfo(bool showDynsym) const
     }
 }
 
-bool OperGlibc::adaptedTargets(const string& path)
+template <typename Traits>
+bool OperGlibc::checkTarget(ElfPtrs<Traits>& targetPtrs, const ParsedLibc& libc,
+                            typename Traits::Verneed*& libcVerneed,
+                            std::vector<TargetVersionInfo>& targetVersions,
+                            std::vector<SymbolPatchInfo>& patches)
 {
-    if (ElfUtils::isDirectory(path))
+    bool ret = true;
+    libcVerneed = nullptr;
+
+    TableInfo<Traits>* tb_version_r = targetPtrs.getTableInfo(".gnu.version_r");
+    TableInfo<Traits>* tb_dynstr = targetPtrs.getTableInfo(".dynstr");
+    TableInfo<Traits>* tb_version = targetPtrs.getTableInfo(".gnu.version");
+    TableInfo<Traits>* tb_dynsym = targetPtrs.getTableInfo(".dynsym");
+
+    if(!tb_version_r || !tb_dynstr || !tb_version || !tb_dynsym)
     {
-        vector<string> files;
-        if (!ElfUtils::collectElfFiles(path, files)) return false;
-
-        bool success = !files.empty();
-        for (const auto& str : files)
-        {
-            if (!adaptedTargetElfFileGlibcVersion(str)) success = false;
-        }
-        return success;
+        ErrorLog::getErrorLog()->putErrInfo("目标ELF缺少必要节区", targetPtrs.getFilePath());
+        return false;
     }
-    return adaptedTargetElfFileGlibcVersion(path);
+
+    char* ehdr = reinterpret_cast<char*>(targetPtrs.elf_hdr);
+    typename Traits::Verneed *verneed = reinterpret_cast<typename Traits::Verneed*>(ehdr + tb_version_r->addr->sh_offset);
+    char *dynstr = ehdr + tb_dynstr->addr->sh_offset;
+    unsigned short *versions = reinterpret_cast<unsigned short*>(ehdr + tb_version->addr->sh_offset);
+    typename Traits::Sym *dynsym = reinterpret_cast<typename Traits::Sym*>(ehdr + tb_dynsym->addr->sh_offset);
+
+    while(true)
+    {
+        if(strcmp(dynstr + verneed->vn_file, "libc.so.6"))
+        {
+            if(verneed->vn_next == 0) break;
+            verneed = reinterpret_cast<typename Traits::Verneed*>((char *)verneed + verneed->vn_next);
+            continue;
+        }
+
+        libcVerneed = verneed;
+
+        if (verneed->vn_cnt > 0 && verneed->vn_aux != 0)
+        {
+            typename Traits::Vernaux *naux = reinterpret_cast<typename Traits::Vernaux*>((char *)verneed + verneed->vn_aux);
+            while(true)
+            {
+                char *name = dynstr + naux->vna_name;
+                targetVersions.push_back({string(name), naux->vna_other & 0x7fff});
+
+                if(naux->vna_next == 0) break;
+                naux = reinterpret_cast<typename Traits::Vernaux*>((char *)naux + naux->vna_next);
+            }
+        }
+        break;
+    }
+    if(!libcVerneed)
+    {
+        ErrorLog::getErrorLog()->putErrInfo("未能找到libc.so.6所在节表", targetPtrs.getFilePath());
+        return false;
+    }
+
+    for (size_t i = 1; i < tb_version->addr->sh_size / sizeof(unsigned short); i++)
+    {
+        unsigned short v = versions[i] & 0x7fff;
+        unsigned hveridx = 0;
+        for (; hveridx < targetVersions.size(); ++hveridx)
+            if (v == targetVersions[hveridx].id) break;
+        if (hveridx == targetVersions.size()) continue;
+
+        const char* dynsymName = dynstr + dynsym[i].st_name;
+        auto verAndId = findSymbol(libc, string(dynsymName), targetVersions[hveridx].name, targetVersions);
+        if(verAndId.second == -1)
+        {
+            ErrorLog::getErrorLog()->putErrInfo(
+                string("目标C库中未找到符号:") + dynsymName + "    GLIBC版本:" + targetVersions[hveridx].name,
+                targetPtrs.getFilePath());
+            ret = false;
+        }
+        else
+        {
+            int hostIdInTarget = -1;
+            for(const auto& vInfo : targetVersions)
+            {
+                if(vInfo.name == verAndId.first)
+                {
+                    hostIdInTarget = vInfo.id;
+                    break;
+                }
+            }
+
+            if(hostIdInTarget != -1)
+            {
+                patches.push_back({i, (int)hveridx, verAndId.first, hostIdInTarget});
+            }
+            else
+            {
+                ErrorLog::getErrorLog()->putErrInfo("未能找到目标elf中对应版本的id", targetPtrs.getFilePath());
+                ret = false;
+            }
+        }
+    }
+    return ret;
 }
 
-void OperGlibc::clearContainer()
+template <typename Traits>
+bool OperGlibc::adaptTargetFile(const std::string& path, const ParsedLibc& libc)
 {
-    targetElfPtrs.reset();
-    targetVersionInfo_vct.clear();
-    validIndexAndId_vct.clear();
-}
+    if (libc.versions.empty()) return false;
 
-
-
-bool OperGlibc::adaptedTargetElfFileGlibcVersion(const string& path)
-{
-    clearContainer();
-    if(glibcVersionInfo_vct.empty()) return false;
-
-    targetElfPtrs.reset(new ElfPtrs(ElfOpenMode::ReadWrite));
-    if(!targetElfPtrs->initPtrs(path.c_str()))
+    unique_ptr<ElfPtrs<Traits>> targetPtrs(new ElfPtrs<Traits>(ElfOpenMode::ReadWrite));
+    if(!targetPtrs->initPtrs(path.c_str()))
     {
         ErrorLog::getErrorLog()->putErrInfo("initTargetPtrs失败", path);
         return false;
     }
 
-    if(!checkFoundDynsym()) return false;
+    typename Traits::Verneed* libcVerneed = nullptr;
+    std::vector<TargetVersionInfo> targetVersions;
+    std::vector<SymbolPatchInfo> patches;
+    if(!checkTarget(*targetPtrs, libc, libcVerneed, targetVersions, patches)) return false;
 
     unsigned removed_count = 0;
     unsigned original_cnt = 0;
 
-    if (targetElfLibcVerneed)
+    if (libcVerneed)
     {
-        original_cnt = targetElfLibcVerneed->vn_cnt;
+        original_cnt = libcVerneed->vn_cnt;
     }
 
-    TableInfo* tb_dynstr = targetElfPtrs->getTableInfo(".dynstr");
-    char* target_dynstr = tb_dynstr ? (reinterpret_cast<char*>(targetElfPtrs->elf_hdr) + tb_dynstr->addr->sh_offset) : nullptr;
+    TableInfo<Traits>* tb_dynstr = targetPtrs->getTableInfo(".dynstr");
+    char* target_dynstr = tb_dynstr ? (reinterpret_cast<char*>(targetPtrs->elf_hdr) + tb_dynstr->addr->sh_offset) : nullptr;
 
     if(!target_dynstr) return false;
 
-    if (targetElfLibcVerneed && original_cnt > 0 && targetElfLibcVerneed->vn_aux != 0)
+    if (libcVerneed && original_cnt > 0 && libcVerneed->vn_aux != 0)
     {
-        Elf64_Vernaux *naux = reinterpret_cast<Elf64_Vernaux *>((char *)targetElfLibcVerneed + targetElfLibcVerneed->vn_aux);
-        Elf64_Vernaux *prev_naux = nullptr;
+        typename Traits::Vernaux *naux = reinterpret_cast<typename Traits::Vernaux *>((char *)libcVerneed + libcVerneed->vn_aux);
+        typename Traits::Vernaux *prev_naux = nullptr;
 
         for (unsigned cnt = 0; cnt < original_cnt; ++cnt)
         {
             char *name = target_dynstr + naux->vna_name;
 
-            Elf64_Vernaux *next_naux = nullptr;
+            typename Traits::Vernaux *next_naux = nullptr;
             if (naux->vna_next != 0)
-                next_naux = reinterpret_cast<Elf64_Vernaux*>((char *)naux + naux->vna_next);
+                next_naux = reinterpret_cast<typename Traits::Vernaux*>((char *)naux + naux->vna_next);
 
-            if(containsVersion(name).second == -1)
+            if(findVersion(libc, name).second == -1)
             {
                 removed_count++;
                 if (prev_naux)
                 {
                     // vna_next 相对于所在节点，跳过当前节点时需从保留节点重新计算。
                     prev_naux->vna_next = next_naux
-                        ? static_cast<Elf64_Word>(reinterpret_cast<char*>(next_naux) - reinterpret_cast<char*>(prev_naux))
+                        ? static_cast<typename Traits::Word>(reinterpret_cast<char*>(next_naux) - reinterpret_cast<char*>(prev_naux))
                         : 0;
                 }
                 else
                 {
                     if (next_naux)
                     {
-                        targetElfLibcVerneed->vn_aux = (char*)next_naux - (char*)targetElfLibcVerneed;
+                        libcVerneed->vn_aux = (char*)next_naux - (char*)libcVerneed;
                     }
                     else
                     {
-                        targetElfLibcVerneed->vn_aux = 0;
+                        libcVerneed->vn_aux = 0;
                     }
                 }
             }
@@ -210,33 +312,33 @@ bool OperGlibc::adaptedTargetElfFileGlibcVersion(const string& path)
             if (naux == nullptr) break;
         }
     }
-    else if (targetElfLibcVerneed)
+    else if (libcVerneed)
     {
-        targetElfLibcVerneed->vn_cnt = 0;
+        libcVerneed->vn_cnt = 0;
     }
 
-    if (targetElfLibcVerneed && removed_count > 0)
+    if (libcVerneed && removed_count > 0)
     {
-        targetElfLibcVerneed->vn_cnt -= removed_count;
+        libcVerneed->vn_cnt -= removed_count;
     }
 
-    TableInfo* tb_version = targetElfPtrs->getTableInfo(".gnu.version");
-    TableInfo* tb_dynsym = targetElfPtrs->getTableInfo(".dynsym");
+    TableInfo<Traits>* tb_version = targetPtrs->getTableInfo(".gnu.version");
+    TableInfo<Traits>* tb_dynsym = targetPtrs->getTableInfo(".dynsym");
 
-    char* target_ehdr = reinterpret_cast<char*>(targetElfPtrs->elf_hdr);
+    char* target_ehdr = reinterpret_cast<char*>(targetPtrs->elf_hdr);
     unsigned short *target_versions = reinterpret_cast<unsigned short*>(target_ehdr + tb_version->addr->sh_offset);
-    Elf64_Sym *target_dynsym = reinterpret_cast<Elf64_Sym*>(target_ehdr + tb_dynsym->addr->sh_offset);
+    typename Traits::Sym *target_dynsym = reinterpret_cast<typename Traits::Sym*>(target_ehdr + tb_dynsym->addr->sh_offset);
 
-    for(const auto& patch : validIndexAndId_vct)
+    for(const auto& patch : patches)
     {
-        if(targetVersionInfo_vct[patch.originalTargetVersionIndex].id != patch.hostVersionId)
+        if(targetVersions[patch.originalTargetVersionIndex].id != patch.hostVersionId)
         {
             const char* dynsymName = target_dynstr + target_dynsym[patch.symbolIndex].st_name;
 
             printf("  修改 %-20s: %-12s(%02u) ----> %-12s(%02u)  文件:%-20s\n",
                    dynsymName,
-                   targetVersionInfo_vct[patch.originalTargetVersionIndex].name.c_str(),
-                   (unsigned short)targetVersionInfo_vct[patch.originalTargetVersionIndex].id,
+                   targetVersions[patch.originalTargetVersionIndex].name.c_str(),
+                   (unsigned short)targetVersions[patch.originalTargetVersionIndex].id,
                    patch.hostVersionName.c_str(),
                    (unsigned short)patch.hostVersionId,
                    path.c_str());
@@ -245,122 +347,123 @@ bool OperGlibc::adaptedTargetElfFileGlibcVersion(const string& path)
             target_versions[patch.symbolIndex] = (target_versions[patch.symbolIndex] & 0x8000) | patch.hostVersionId;
         }
     }
-    return targetElfPtrs->flush();
+    return targetPtrs->flush();
 }
 
-bool OperGlibc::checkFoundDynsym()
+template <typename Traits>
+FileAdaptResult OperGlibc::adaptOneFileFor(const std::string& path, const std::vector<std::string>& libcPaths)
 {
-    bool ret = true;
-    targetElfLibcVerneed = nullptr;
-
-    TableInfo* tb_version_r = targetElfPtrs->getTableInfo(".gnu.version_r");
-    TableInfo* tb_dynstr = targetElfPtrs->getTableInfo(".dynstr");
-    TableInfo* tb_version = targetElfPtrs->getTableInfo(".gnu.version");
-    TableInfo* tb_dynsym = targetElfPtrs->getTableInfo(".dynsym");
-
-    if(!tb_version_r || !tb_dynstr || !tb_version || !tb_dynsym)
+    typename Traits::Half machine = 0;
     {
-        ErrorLog::getErrorLog()->putErrInfo("目标ELF缺少必要节区", targetElfPtrs->getFilePath());
-        return false;
+        ElfPtrs<Traits> probe(ElfOpenMode::ReadOnly);
+        if (!probe.initPtrs(path))
+        {
+            ErrorLog::getErrorLog()->putErrInfo("目标不是有效的 ELF 文件", path);
+            return FileAdaptResult::Failed;
+        }
+        machine = probe.elf_hdr->e_machine;
     }
 
-    char* ehdr = reinterpret_cast<char*>(targetElfPtrs->elf_hdr);
-    Elf64_Verneed *verneed = reinterpret_cast<Elf64_Verneed*>(ehdr + tb_version_r->addr->sh_offset);
-    char *dynstr = ehdr + tb_dynstr->addr->sh_offset;
-    unsigned short *versions = reinterpret_cast<unsigned short*>(ehdr + tb_version->addr->sh_offset);
-    Elf64_Sym *dynsym = reinterpret_cast<Elf64_Sym*>(ehdr + tb_dynsym->addr->sh_offset);
-
-    while(true)
+    // 按命令行顺序挑候选：身份（类别/字节序/架构）匹配且能解析成功的
+    // 第一个 libc；解析失败时继续试下一个匹配的候选。
+    const ParsedLibc* chosen = nullptr;
+    for (const auto& candidate : libcPaths)
     {
-        if(strcmp(dynstr + verneed->vn_file, "libc.so.6"))
+        ElfIdentity id;
+        if (!ElfUtils::identifyElf(candidate, id)) continue;
+        if (id.elfClass != Traits::elfClass || id.elfData != ELFDATA2LSB || id.machine != machine) continue;
+        auto it = m_libcCache.find(candidate);
+        if (it == m_libcCache.end())
         {
-            if(verneed->vn_next == 0) break;
-            verneed = reinterpret_cast<Elf64_Verneed*>((char *)verneed + verneed->vn_next);
-            continue;
+            ParsedLibc parsed;
+            if (!parseLibc<Traits>(candidate, parsed)) continue;
+            it = m_libcCache.emplace(candidate, std::move(parsed)).first;
         }
-
-        targetElfLibcVerneed = verneed;
-
-        if (verneed->vn_cnt > 0 && verneed->vn_aux != 0)
-        {
-            Elf64_Vernaux *naux = reinterpret_cast<Elf64_Vernaux*>((char *)verneed + verneed->vn_aux);
-            while(true)
-            {
-                char *name = dynstr + naux->vna_name;
-                targetVersionInfo_vct.push_back({string(name), naux->vna_other & 0x7fff});
-
-                if(naux->vna_next == 0) break;
-                naux = reinterpret_cast<Elf64_Vernaux*>((char *)naux + naux->vna_next);
-            }
-        }
+        chosen = &it->second;
         break;
     }
-    if(!targetElfLibcVerneed)
+    if (!chosen)
     {
-        ErrorLog::getErrorLog()->putErrInfo("未能找到libc.so.6所在节表", targetElfPtrs->getFilePath());
-        return false;
+        ElfIdentity targetId;
+        ElfUtils::identifyElf(path, targetId);
+        warnNoMatchingLibc(path, targetId, libcPaths);
+        return FileAdaptResult::Skipped;
     }
-
-    for (size_t i = 1; i < tb_version->addr->sh_size / sizeof(unsigned short); i++)
-    {
-        unsigned short v = versions[i] & 0x7fff;
-        unsigned hveridx = 0;
-        for (; hveridx < targetVersionInfo_vct.size(); ++hveridx)
-            if (v == targetVersionInfo_vct[hveridx].id) break;
-        if (hveridx == targetVersionInfo_vct.size()) continue;
-
-        const char* dynsymName = dynstr + dynsym[i].st_name;
-        auto verAndId = containsDynsym(string(dynsymName), targetVersionInfo_vct[hveridx].name);
-        if(verAndId.second == -1)
-        {
-            ErrorLog::getErrorLog()->putErrInfo(
-                string("目标C库中未找到符号:") + dynsymName + "    GLIBC版本:" + targetVersionInfo_vct[hveridx].name,
-                targetElfPtrs->getFilePath());
-            ret = false;
-        }
-        else
-        {
-            int hostIdInTarget = -1;
-            for(const auto& vInfo : targetVersionInfo_vct)
-            {
-                if(vInfo.name == verAndId.first)
-                {
-                    hostIdInTarget = vInfo.id;
-                    break;
-                }
-            }
-
-            if(hostIdInTarget != -1)
-            {
-                validIndexAndId_vct.push_back({i, (int)hveridx, verAndId.first, hostIdInTarget});
-            }
-            else
-            {
-                ErrorLog::getErrorLog()->putErrInfo("未能找到目标elf中对应版本的id", targetElfPtrs->getFilePath());
-                ret = false;
-            }
-        }
-    }
-    return ret;
+    return adaptTargetFile<Traits>(path, *chosen) ? FileAdaptResult::Patched : FileAdaptResult::Failed;
 }
 
-pair<string, int> OperGlibc::containsVersion(const string& version) const
+FileAdaptResult OperGlibc::adaptOneFile(const std::string& path, const std::vector<std::string>& libcPaths)
 {
-    auto it = versionIds.find(version);
-    if (it != versionIds.end()) return {it->first, it->second};
+    ElfIdentity id;
+    if (!ElfUtils::identifyElf(path, id))
+    {
+        ElfUtils::logIdentifyFailure(path);
+        return FileAdaptResult::Failed;
+    }
+    if (id.elfData == ELFDATA2MSB)
+    {
+        ElfUtils::warnUnsupportedEndian(path, id);
+        return FileAdaptResult::Skipped;
+    }
+    if (id.elfClass == ELFCLASS64) return adaptOneFileFor<Elf64Traits>(path, libcPaths);
+    return adaptOneFileFor<Elf32Traits>(path, libcPaths);
+}
+
+bool OperGlibc::adaptedTargets(const string& path, const vector<string>& libcPaths)
+{
+    // 先校验候选 libc 是否可读：缺失/损坏的候选在处理目标前就应报错
+    // （与旧版先解析 libc 再处理目标的行为一致）；能识别但解析失败
+    // 的候选在挑中时再记错，继续试下一个匹配的候选。
+    for (const auto& candidate : libcPaths)
+    {
+        ElfIdentity id;
+        if (!ElfUtils::identifyElf(candidate, id)) ElfUtils::logIdentifyFailure(candidate);
+    }
+
+    if (ElfUtils::isDirectory(path))
+    {
+        vector<string> files;
+        if (!ElfUtils::collectElfFiles(path, files)) return false;
+
+        unsigned patched = 0;
+        unsigned skipped = 0;
+        bool success = true;
+        for (const auto& str : files)
+        {
+            const FileAdaptResult result = adaptOneFile(str, libcPaths);
+            if (result == FileAdaptResult::Patched) ++patched;
+            else if (result == FileAdaptResult::Skipped) ++skipped;
+            else success = false;
+        }
+        if (patched == 0)
+        {
+            ErrorLog::getErrorLog()->putErrInfo("目录中没有可适配的 ELF 文件", path);
+            return false;
+        }
+        (void)skipped;
+        return success;
+    }
+    return adaptOneFile(path, libcPaths) == FileAdaptResult::Patched;
+}
+
+pair<string, int> OperGlibc::findVersion(const ParsedLibc& libc, const string& version)
+{
+    auto it = libc.versionIds.find(version);
+    if (it != libc.versionIds.end()) return {it->first, it->second};
     return {"", -1};
 }
 
-pair<string, int> OperGlibc::containsDynsym(const string& dynsym, const string& preferredVersion) const
+pair<string, int> OperGlibc::findSymbol(const ParsedLibc& libc, const string& dynsym, const string& preferredVersion,
+                                        const vector<TargetVersionInfo>& targetVersions)
 {
-    auto found = symbolVersions.find(dynsym);
-    if (found == symbolVersions.end()) return {"", -1};
+    auto found = libc.symbolVersions.find(dynsym);
+    if (found == libc.symbolVersions.end()) return {"", -1};
     pair<string, int> available = {"", -1};
     for (const auto& version : found->second)
     {
         if (version.first == preferredVersion) return version;
         if (available.second == -1)
-            for (const auto& target : targetVersionInfo_vct)
+            for (const auto& target : targetVersions)
                 if (target.name == version.first) { available = version; break; }
     }
     return available.second != -1 ? available : found->second.front();

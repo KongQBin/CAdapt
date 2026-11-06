@@ -21,6 +21,7 @@ CAdapt 是面向 Linux 的 ELF 元数据修补工具，可调整已编译程序�
 - **动态链接器**：修改 ELF 的 `PT_INTERP` 解释器路径。等长或更短的新路径原地改写，剩余字节补零；更长的新路径会重写文件——新串追加到文件末尾，`PT_INTERP` 与 `.interp` 节区改指向新位置，其余内容与全部偏移保持不动。写入前校验新解释器存在、可执行、为同架构 `ET_DYN` 且本身无 `PT_INTERP`，写入后重读验证。可用 `-p` 只查看、`--dry-run` 只试运行。
 - **RPATH**：修改 ELF 的 `DT_RPATH`/`DT_RUNPATH` 运行库搜索路径，只支持等长或更短的新路径（原地改写进 `.dynstr`，剩余字节补零），更长路径会被拒绝且不修改文件；无 RPATH 的目标也会被拒绝。同时存在两项时优先改 `DT_RUNPATH`。可用 `--print-rpath` 只查看、`--dry-run` 只试运行，空字符串表示清空。
 - **KMOD**：修改 `.ko` 的 `vermagic` 与传统 `__versions` 格式的符号 CRC。
+- **32 位与多候选**：支持 32 位与 64 位小端 ELF。`-c`（libc）与 `-i`（解释器）均可重复指定（如 32 位与 64 位各一个），每个目标按类别、字节序、机器架构挑选匹配的候选；目录可同时包含两种文件。指定的 libc/解释器与目标不匹配时警告并跳过该文件；大端 ELF 暂不支持，警告并跳过。32 位内核模块的 `__versions` 条目用 4 字节 CRC；目标模块架构与当前系统不一致、而符号 CRC 或 `vermagic` 又取自当前系统时，警告并拒绝修改。
 
 ## 构建与检查
 
@@ -50,6 +51,10 @@ ctest --test-dir build --output-on-failure
 ./build/cadapt -i /lib64/ld-linux-x86-64.so.2 -t ./my_program
 ./build/cadapt -p -t ./my_program
 ./build/cadapt -i /lib64/ld-linux-x86-64.so.2 -t ./my_program --dry-run
+
+# 混合目录：32 位与 64 位目标各自匹配对应的 libc/解释器
+./build/cadapt -c /lib/libc.so.6 -c /lib64/libc.so.6 -t ./mixed_dir
+./build/cadapt -i /lib/ld-linux.so.2 -i /lib64/ld-linux-x86-64.so.2 -t ./mixed_dir
 ```
 
 ### 参数与行为
@@ -71,7 +76,7 @@ ctest --test-dir build --output-on-failure
 
 ## 支持范围与风险
 
-- 当前支持带节头表的 **64 位小端 ELF**；不支持 32 位、大端或扩展节区编号。
+- 当前支持带节头表的 **32 位与 64 位小端 ELF**；不支持大端或扩展节区编号。
 - 解释器适配：更长路径会重写文件（临时文件 + 原子替换），新文件换 inode，符号链接目标会被拒绝；`.interp` 节区的 `sh_addr` 仍指向旧位置（只改 `sh_offset`/`sh_size`），以 `PT_INTERP` 为准。
 - RPATH 适配只支持等长或更短的新路径，更长路径需要重排文件并新增 LOAD 段（patchelf 的做法），暂不支持；新增 RPATH 条目同样暂不支持（动态段一般没有空闲槽位）。
 - 扩展 KMOD 节区 `__version_ext_names` / `__version_ext_crcs` 会明确拒绝修改。
