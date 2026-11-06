@@ -18,6 +18,7 @@ CAdapt 是面向 Linux 的 ELF 元数据修补工具，可调整已编译程序�
 ## 功能
 
 - **GLIBC**：读取指定 `libc.so.6` 的符号版本，适配单个 ELF 或目录；原版本可用时优先保留，保留符号隐藏标记。
+- **动态链接器（第一阶段）**：修改 ELF 的 `PT_INTERP` 解释器路径，只支持等长或更短的新路径，更长路径会被拒绝且不修改文件；写入前校验新解释器存在、可执行、为同架构 `ET_DYN` 且本身无 `PT_INTERP`，写入后重读验证。可用 `-p` 只查看、`--dry-run` 只试运行。
 - **KMOD**：修改 `.ko` 的 `vermagic` 与传统 `__versions` 格式的符号 CRC。
 
 ## 构建与检查
@@ -43,6 +44,11 @@ ctest --test-dir build --output-on-failure
 # KMOD
 ./build/cadapt -m ./my_driver.ko -s ./Module.symvers \
   -v "4.18.0-193.el8.x86_64 SMP mod_unload"
+
+# 动态链接器（解释器）
+./build/cadapt -i /lib64/ld-linux-x86-64.so.2 -t ./my_program
+./build/cadapt -p -t ./my_program
+./build/cadapt -i /lib64/ld-linux-x86-64.so.2 -t ./my_program --dry-run
 ```
 
 ### 参数与行为
@@ -65,6 +71,7 @@ ctest --test-dir build --output-on-failure
 ## 支持范围与风险
 
 - 当前支持带节头表的 **64 位小端 ELF**；不支持 32 位、大端或扩展节区编号。
+- 解释器适配第一阶段只支持等长或更短的新路径；更长路径需要重写文件，暂不支持。
 - 扩展 KMOD 节区 `__version_ext_names` / `__version_ext_crcs` 会明确拒绝修改。
 - 工具原地修改文件，请先备份。仅修改元数据，无法检查或修复 ABI 差异；程序仍可能崩溃，错误的内核模块可能引发 Kernel Panic/Oops。
 - 错误日志写入可执行文件目录下的 `cadaptErrlog.txt`；日志不可写时会输出到 stderr。

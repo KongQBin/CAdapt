@@ -12,6 +12,13 @@ cases = [
     (["--help", "--unknown"], 1), (["--unknown", "--help"], 1),
     (["--help", "--libc"], 1), (["--help", "extra"], 1),
     (["-c", "/nonexistent/libc.so.6"], 1), (["-t", "target"], 1),
+    (["-i"], 1), (["--interp"], 1), (["-p"], 1), (["--dry-run"], 1),
+    (["-i", "/lib64/ld-linux-x86-64.so.2"], 1),
+    (["-i", "relative.so", "-t", "x"], 1),
+    (["-i", "/lib64/ld-linux-x86-64.so.2", "-p", "-t", "x"], 1),
+    (["-p", "--dry-run", "-t", "x"], 1),
+    (["--help", "-i", "/lib64/ld-linux-x86-64.so.2"], 0),
+    (["--help", "-p", "-t", "x"], 0),
 ]
 for args, expected in cases:
     result = subprocess.run([str(binary), *args], capture_output=True, text=True, timeout=10)
