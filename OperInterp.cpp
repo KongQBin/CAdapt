@@ -1,9 +1,9 @@
 #include "OperInterp.h"
+#include "ElfUtils.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/types.h>
-#include <dirent.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
@@ -87,15 +87,13 @@ bool OperInterp::showInterpreterForFile(const string& path) const
 
 bool OperInterp::showTargets(const string& path)
 {
-    DIR *dir = opendir(path.c_str());
-    if (dir)
+    if (ElfUtils::isDirectory(path))
     {
-        closedir(dir);
-        targetElf_vct.clear();
-        if (!getAllElf(path.c_str())) return false;
+        vector<string> files;
+        if (!ElfUtils::collectElfFiles(path, files)) return false;
         bool success = true;
         unsigned printed = 0;
-        for (const auto& file : targetElf_vct)
+        for (const auto& file : files)
         {
             const int has = hasInterpreter(file);
             if (has < 0) success = false;
@@ -407,17 +405,15 @@ bool OperInterp::rewriteWithLongerInterpreter(const string& path, const string& 
 
 bool OperInterp::adaptTargets(const string& path, const string& newInterp, bool dryRun)
 {
-    DIR *dir = opendir(path.c_str());
-    if (dir)
+    if (ElfUtils::isDirectory(path))
     {
-        closedir(dir);
-        targetElf_vct.clear();
-        if (!getAllElf(path.c_str())) return false;
+        vector<string> files;
+        if (!ElfUtils::collectElfFiles(path, files)) return false;
 
         unsigned patched = 0;
         unsigned skipped = 0;
         bool success = true;
-        for (const auto& file : targetElf_vct)
+        for (const auto& file : files)
         {
             const int has = hasInterpreter(file);
             if (has < 0)
@@ -446,83 +442,4 @@ bool OperInterp::adaptTargets(const string& path, const string& newInterp, bool 
     return setInterpreterForFile(path, newInterp, dryRun);
 }
 
-bool OperInterp::getAllElf(const char *dir)
-{
-    DIR *d;
-    struct dirent *file;
-    struct stat sb;
-    string filePath;
 
-    if(!(d = opendir(dir)))
-    {
-        ErrorLog::getErrorLog()->putErrInfo("扫描目录失败", dir);
-        return false;
-    }
-    bool success = true;
-    while(true)
-    {
-        errno = 0;
-        file = readdir(d);
-        if (!file)
-        {
-            if (errno != 0)
-            {
-                ErrorLog::getErrorLog()->putErrInfo("读取目录失败", dir);
-                success = false;
-            }
-            break;
-        }
-        if(strcmp(file->d_name, ".") == 0 || strcmp(file->d_name, "..") == 0)
-            continue;
-        filePath = string(dir) + "/" + file->d_name;
-        if(lstat(filePath.c_str(), &sb) >= 0)
-        {
-            if(S_ISLNK(sb.st_mode)) continue;
-            if(S_ISDIR(sb.st_mode))
-            {
-                if (!getAllElf(filePath.c_str())) success = false;
-            }
-            else if(S_ISREG(sb.st_mode))
-            {
-                const int result = isElf(filePath.c_str());
-                if (result < 0) success = false;
-                else if (result > 0)
-                    targetElf_vct.push_back(filePath);
-            }
-        }
-        else
-        {
-            ErrorLog::getErrorLog()->putErrInfo("读取目录项状态失败", filePath);
-            success = false;
-        }
-    }
-    closedir(d);
-    return success;
-}
-
-int OperInterp::isElf(const char *file) const
-{
-    bool ret = false;
-    const char elfHead[7] = {0x7f,0x45,0x4c,0x46,0x02,0x01,0x01};
-    char targetHead[7] = { 0 };
-    int fd = 0;
-
-    fd = open(file, O_RDONLY);
-    if(fd < 0)
-    {
-        ErrorLog::getErrorLog()->putErrInfo("扫描时打开文件失败", file);
-        return -1;
-    }
-
-    const ssize_t bytes = read(fd,targetHead,sizeof(targetHead));
-    if(bytes < 0)
-    {
-        close(fd);
-        ErrorLog::getErrorLog()->putErrInfo("扫描时读取文件失败", file);
-        return -1;
-    }
-    if(static_cast<size_t>(bytes) == sizeof(targetHead))
-        if(memcmp(elfHead,targetHead,sizeof(targetHead)) == 0) ret = true;
-    close(fd);
-    return ret;
-}

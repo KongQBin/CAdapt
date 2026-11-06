@@ -39,9 +39,6 @@ public:
     void clearContainer();
 
 private:
-    bool getAllElf(const char *dir);
-    int isElf(const char *file) const; // 1: ELF，0: 非ELF，-1: 读取失败。
-
     bool adaptedTargetElfFileGlibcVersion(const std::string& path);
     bool checkFoundDynsym();
 
@@ -52,7 +49,6 @@ private:
     std::unique_ptr<ElfPtrs> targetElfPtrs;
 
     Elf64_Verneed *targetElfLibcVerneed = nullptr;
-    std::vector<std::string> targetElf_vct;
     std::vector<TargetVersionInfo> targetVersionInfo_vct;
     std::vector<SymbolPatchInfo> validIndexAndId_vct;
     std::vector<GlibcVersionInfo> glibcVersionInfo_vct;
