@@ -42,6 +42,14 @@ inline void print_help(const char* prog_name)
         std::cout << "      --dry-run         与 -i 联用时只打印将要做的修改，不写文件。" << std::endl;
         std::cout << "  -t, --target <path>   必需。指定要修改解释器的ELF文件/所在目录。" << std::endl;
         std::cout << std::endl;
+        std::cout << "【RPATH 适配选项】" << std::endl;
+        std::cout << "  -r, --rpath <path>    必需(与 --print-rpath 二选一)。新的运行库搜索路径，冒号分隔；空串表示清空。" << std::endl;
+        std::cout << "                        只支持等长或更短的新路径（原地改写），更长路径会被拒绝且不修改文件；无 RPATH 的目标也会被拒绝。" << std::endl;
+        std::cout << "                        同时存在 DT_RPATH 与 DT_RUNPATH 时优先改 RUNPATH。" << std::endl;
+        std::cout << "      --print-rpath     只查看目标的当前 RPATH，不修改文件。" << std::endl;
+        std::cout << "      --dry-run         与 -r 联用时只打印将要做的修改，不写文件。" << std::endl;
+        std::cout << "  -t, --target <path>   必需。指定要修改 RPATH 的ELF文件/所在目录。" << std::endl;
+        std::cout << std::endl;
         std::cout << "【内核模块(ko) 适配选项】" << std::endl;
         std::cout << "  -m, --kmod <path>     必需。指定要修改的内核模块(.ko)文件位置。" << std::endl;
         std::cout << "  -s, --symvers <path>  可选。指定内核符号版本文件(Module.symvers)的位置。若不指定，将从当前运行系统中提取。" << std::endl;
@@ -54,6 +62,8 @@ inline void print_help(const char* prog_name)
         std::cout << "  GLIBC适配: " << prog_name << " -c /lib64/libc.so.6 -t ./my_program" << std::endl;
         std::cout << "  解释器适配: " << prog_name << " -i /lib64/ld-linux-x86-64.so.2 -t ./my_program" << std::endl;
         std::cout << "  查看解释器: " << prog_name << " -p -t ./my_program" << std::endl;
+        std::cout << "  RPATH适配: " << prog_name << " -r /opt/my-libs -t ./my_program" << std::endl;
+        std::cout << "  查看RPATH: " << prog_name << " --print-rpath -t ./my_program" << std::endl;
         std::cout << "  KMOD适配:  " << prog_name << " -m ./my_driver.ko -s ./Module.symvers -v \"4.18.0-193.el8.x86_64 SMP mod_unload\"" << std::endl;
     }
     else
@@ -69,6 +79,14 @@ inline void print_help(const char* prog_name)
         std::cout << "      --dry-run         With -i, only print the planned change without writing the file." << std::endl;
         std::cout << "  -t, --target <path>   Required. Path to the ELF file or directory whose interpreter is to be changed." << std::endl;
         std::cout << std::endl;
+        std::cout << "[RPATH Adaptation Options]" << std::endl;
+        std::cout << "  -r, --rpath <path>    Required (either -r or --print-rpath). New library search path, colon-separated; an empty string clears it." << std::endl;
+        std::cout << "                        Only an equal or shorter path is supported (patched in place); a longer path is rejected without modifying the file. A target without RPATH is rejected too." << std::endl;
+        std::cout << "                        When both DT_RPATH and DT_RUNPATH exist, RUNPATH is modified." << std::endl;
+        std::cout << "      --print-rpath     Show the target's current RPATH without modifying the file." << std::endl;
+        std::cout << "      --dry-run         With -r, only print the planned change without writing the file." << std::endl;
+        std::cout << "  -t, --target <path>   Required. Path to the ELF file or directory whose RPATH is to be changed." << std::endl;
+        std::cout << std::endl;
         std::cout << "[Kernel Module (.ko) Adaptation Options]" << std::endl;
         std::cout << "  -m, --kmod <path>     Required. Path to the target kernel module (.ko) file to modify." << std::endl;
         std::cout << "  -s, --symvers <path>  Optional. Path to the Module.symvers file. If not specified, extracts from the current running system." << std::endl;
@@ -81,6 +99,8 @@ inline void print_help(const char* prog_name)
         std::cout << "  GLIBC Adaptation: " << prog_name << " -c /lib64/libc.so.6 -t ./my_program" << std::endl;
         std::cout << "  Interpreter Adaptation: " << prog_name << " -i /lib64/ld-linux-x86-64.so.2 -t ./my_program" << std::endl;
         std::cout << "  Show Interpreter: " << prog_name << " -p -t ./my_program" << std::endl;
+        std::cout << "  RPATH Adaptation: " << prog_name << " -r /opt/my-libs -t ./my_program" << std::endl;
+        std::cout << "  Show RPATH: " << prog_name << " --print-rpath -t ./my_program" << std::endl;
         std::cout << "  KMOD Adaptation:  " << prog_name << " -m ./my_driver.ko -s ./Module.symvers -v \"4.18.0-193.el8.x86_64 SMP mod_unload\"" << std::endl;
     }
 }

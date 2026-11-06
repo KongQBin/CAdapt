@@ -5,6 +5,7 @@
 #include "OperGlibc.h"
 #include "OperKmod.h"
 #include "OperInterp.h"
+#include "OperRpath.h"
 #include "help.hpp"
 
 using namespace std;
@@ -17,6 +18,9 @@ int main(int argc, char **argv)
     string vermagic_str;
     string interp_path;
     bool print_interp = false;
+    string rpath_value;
+    bool set_rpath = false;
+    bool print_rpath = false;
     bool dry_run = false;
     bool show_help = argc == 1;
     bool argument_error = false;
@@ -31,6 +35,8 @@ int main(int argc, char **argv)
         {"vermagic", required_argument, 0, 'v'},
         {"interp",   required_argument, 0, 'i'},
         {"print-interp", no_argument,   0, 'p'},
+        {"rpath",    required_argument, 0, 'r'},
+        {"print-rpath", no_argument,    0, 1002},
         {"dry-run",  no_argument,       0, 1000},
         {0, 0, 0, 0}
     };
@@ -38,8 +44,8 @@ int main(int argc, char **argv)
     int opt = 0;
     int option_index = 0;
 
-    // "hc:t:m:s:v:i:p" 是短选项字符串，带有冒号的表示需要提供参数
-    while ((opt = getopt_long(argc, argv, "hc:t:m:s:v:i:p", long_options, &option_index)) != -1)
+    // "hc:t:m:s:v:i:pr:" 是短选项字符串，带有冒号的表示需要提供参数
+    while ((opt = getopt_long(argc, argv, "hc:t:m:s:v:i:pr:", long_options, &option_index)) != -1)
     {
         switch (opt) {
         case 'h':
@@ -66,6 +72,13 @@ int main(int argc, char **argv)
         case 'p':
             print_interp = true;
             break;
+        case 'r':
+            rpath_value = optarg;
+            set_rpath = true;
+            break;
+        case 1002:
+            print_rpath = true;
+            break;
         case 1000:
             dry_run = true;
             break;
@@ -87,9 +100,10 @@ int main(int argc, char **argv)
     bool run_glibc = !libc_path.empty();
     bool run_kmod  = !kmod_path.empty();
     bool run_interp = !interp_path.empty() || print_interp;
+    bool run_rpath = set_rpath || print_rpath;
 
-    if (!show_help && !run_glibc && !run_kmod && !run_interp) {
-        cerr << "错误：必须指定 GLIBC 适配参数(-c/-t)、内核模块适配参数(-m) 或 解释器适配参数(-i/-p)。" << endl;
+    if (!show_help && !run_glibc && !run_kmod && !run_interp && !run_rpath) {
+        cerr << "错误：必须指定 GLIBC 适配参数(-c/-t)、内核模块适配参数(-m)、解释器适配参数(-i/-p) 或 RPATH 适配参数(-r/--print-rpath)。" << endl;
         show_help = true;
         argument_error = true;
     }
@@ -123,6 +137,23 @@ int main(int argc, char **argv)
             argument_error = true;
         } else if (!interp_path.empty() && interp_path[0] != '/') {
             cerr << "错误：--interp 参数 \"" << interp_path << "\" 必须是绝对路径。" << endl;
+            show_help = true;
+            argument_error = true;
+        }
+    }
+
+    // 校验 RPATH 参数
+    if (!show_help && run_rpath) {
+        if (target_path.empty()) {
+            cerr << "错误：对于 RPATH 适配，--target 是必需参数。" << endl;
+            show_help = true;
+            argument_error = true;
+        } else if (print_rpath && set_rpath) {
+            cerr << "错误：--print-rpath 不能与 --rpath 同时使用。" << endl;
+            show_help = true;
+            argument_error = true;
+        } else if (print_rpath && dry_run) {
+            cerr << "错误：--print-rpath 不能与 --dry-run 同时使用。" << endl;
             show_help = true;
             argument_error = true;
         }
@@ -177,9 +208,34 @@ int main(int argc, char **argv)
         else cout << "动态链接器适配完成。" << endl;
     }
 
+    // ================== RPATH 适配 ==================
+    if (run_rpath) {
+        if (run_glibc || run_interp) cout << endl; // 空行分隔
+        cout << "============== RPATH 适配 ==============" << endl;
+        cout << "目标 路径: " << target_path << endl;
+        if (set_rpath) cout << "新 RPATH: " << (rpath_value.empty() ? "(清空)" : rpath_value) << endl;
+        if (dry_run) cout << "试运行模式，不修改文件。" << endl;
+
+        OperRpath operRpath;
+        bool success = false;
+        if (print_rpath) {
+            success = operRpath.showTargets(target_path);
+        } else {
+            success = operRpath.adaptTargets(target_path, rpath_value, dry_run);
+        }
+        if (!success) {
+            cerr << "RPATH 适配失败，请检查日志。" << endl;
+            return 1;
+        }
+
+        if (print_rpath) cout << "RPATH 查看完成。" << endl;
+        else if (dry_run) cout << "RPATH 试运行完成，未修改文件。" << endl;
+        else cout << "RPATH 适配完成。" << endl;
+    }
+
     // ================== 内核模块(KO) 适配 ==================
     if (run_kmod) {
-        if (run_glibc || run_interp) cout << endl; // 空行分隔
+        if (run_glibc || run_interp || run_rpath) cout << endl; // 空行分隔
         cout << "============== 内核模块 适配 ==============" << endl;
         cout << "目标模块: " << kmod_path << endl;
         if (!symvers_path.empty()) cout << "符号文件(Symvers): " << symvers_path << endl;
