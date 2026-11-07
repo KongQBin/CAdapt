@@ -46,7 +46,8 @@ inline void print_help(const char* prog_name)
         std::cout << std::endl;
         std::cout << "【RPATH 适配选项】" << std::endl;
         std::cout << "  -r, --rpath <path>    必需(与 --print-rpath 二选一)。新的运行库搜索路径，冒号分隔；空串表示清空。" << std::endl;
-        std::cout << "                        只支持等长或更短的新路径（原地改写），更长路径会被拒绝且不修改文件；无 RPATH 的目标也会被拒绝。" << std::endl;
+        std::cout << "                        等长或更短的新路径原地改写；更长路径会重写文件：新 .dynstr 追加到文件末尾的新 LOAD 段里。" << std::endl;
+        std::cout << "                        无 RPATH 的目标会新增一条 DT_RUNPATH（.dynamic 增长一个槽位）。" << std::endl;
         std::cout << "                        同时存在 DT_RPATH 与 DT_RUNPATH 时优先改 RUNPATH。" << std::endl;
         std::cout << "      --print-rpath     只查看目标的当前 RPATH，不修改文件。" << std::endl;
         std::cout << "      --dry-run         与 -r 联用时只打印将要做的修改，不写文件。" << std::endl;
@@ -95,7 +96,8 @@ inline void print_help(const char* prog_name)
         std::cout << std::endl;
         std::cout << "[RPATH Adaptation Options]" << std::endl;
         std::cout << "  -r, --rpath <path>    Required (either -r or --print-rpath). New library search path, colon-separated; an empty string clears it." << std::endl;
-        std::cout << "                        Only an equal or shorter path is supported (patched in place); a longer path is rejected without modifying the file. A target without RPATH is rejected too." << std::endl;
+        std::cout << "                        An equal or shorter path is patched in place; a longer path rewrites the file: the new .dynstr is appended in a new PT_LOAD segment at the end of the file." << std::endl;
+        std::cout << "                        A target without RPATH gains a new DT_RUNPATH entry (.dynamic grows by one slot)." << std::endl;
         std::cout << "                        When both DT_RPATH and DT_RUNPATH exist, RUNPATH is modified." << std::endl;
         std::cout << "      --print-rpath     Show the target's current RPATH without modifying the file." << std::endl;
         std::cout << "      --dry-run         With -r, only print the planned change without writing the file." << std::endl;

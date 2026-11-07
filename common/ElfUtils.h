@@ -14,6 +14,16 @@
 // 单个文件一次适配的结果：已处理 / 跳过（不计失败）/ 失败。
 enum class FileAdaptResult { Patched, Skipped, Failed };
 
+// 同目录临时文件的守卫：提交（rename）前析构会关闭 fd 并删除临时文件。
+// 文件重写（解释器更长路径、RPATH 更长路径等）共用。
+struct TempFileGuard {
+    int fd;
+    std::string path;
+    bool committed;
+    TempFileGuard() : fd(-1), committed(false) {}
+    ~TempFileGuard();
+};
+
 // ELF 身份：类别（32/64 位）、字节序、机器架构。
 struct ElfIdentity
 {
@@ -49,4 +59,11 @@ public:
     // 失败”“不是普通文件”“文件头无效”等精确原因记入错误日志（仅用
     // 于错误路径，文件此时已确认无法识别）。
     static void logIdentifyFailure(const std::string& path);
+
+    // 把 srcFd 的全部内容写到 dstFd；任一读写出错返回 false。
+    static bool copyFileTo(int srcFd, int dstFd);
+    // 把 data 的全部 size 字节写到 fd；出错返回 false。
+    static bool writeAll(int fd, const void* data, size_t size);
+    // 对 filePath 所在的目录做 fsync（rename 后持久化目录项）。
+    static bool fsyncDirectory(const std::string& filePath);
 };

@@ -61,12 +61,13 @@ bool OperRpath::resolveEntry(ElfPtrs<Traits>& ptrs, RpathEntry<Traits>& entry) c
 }
 
 template <typename Traits>
-int OperRpath::hasRpath(const string& path) const
+OperRpath::RpathState OperRpath::rpathState(const string& path) const
 {
     ElfPtrs<Traits> ptrs(ElfOpenMode::ReadOnly);
-    if (!ptrs.initPtrs(path.c_str())) return -1;
+    if (!ptrs.initPtrs(path.c_str())) return RpathState::Invalid;
+    if (!ptrs.findProgramHeader(PT_DYNAMIC)) return RpathState::NoDynamic;
     RpathEntry<Traits> entry;
-    return resolveEntry(ptrs, entry) ? 1 : 0;
+    return resolveEntry(ptrs, entry) ? RpathState::HasEntry : RpathState::NoEntry;
 }
 
 template <typename Traits>
@@ -126,9 +127,41 @@ bool OperRpath::validateNewRpath(const string& newRpath) const
 }
 
 template <typename Traits>
-bool OperRpath::setRpathForFile(const string& path, const string& newRpath, bool dryRun)
+bool OperRpath::buildDynamicWithRpath(const string& oldDynamic,
+                                      typename Traits::Xword newStringOffset,
+                                      string& newDynamic) const
 {
-    RpathEntry<Traits> entry;
+    using Dyn = typename Traits::Dyn;
+    if (oldDynamic.size() % sizeof(Dyn) != 0) return false;
+    const size_t count = oldDynamic.size() / sizeof(Dyn);
+    if (count == 0) return false;
+    const Dyn* dyn = reinterpret_cast<const Dyn*>(oldDynamic.data());
+    if (dyn[count - 1].d_tag != DT_NULL) return false;
+    for (size_t i = 0; i < count; ++i)
+    {
+        if (dyn[i].d_tag == DT_NULL) break;
+        // DT_MIPS_RLD_MAP_REL 的值与自身槽位地址相关，随 .dynamic 搬家会错位。
+        if (dyn[i].d_tag == DT_MIPS_RLD_MAP_REL) return false;
+    }
+    // 新条目放最前面，其余条目下移一位，DT_NULL 仍在末尾。
+    newDynamic.assign(oldDynamic.size() + sizeof(Dyn), '\0');
+    Dyn entry = {};
+    entry.d_tag = DT_RUNPATH;
+    entry.d_un.d_val = newStringOffset;
+    memcpy(&newDynamic[0], &entry, sizeof(Dyn));
+    memcpy(&newDynamic[sizeof(Dyn)], oldDynamic.data(), oldDynamic.size());
+    return true;
+}
+
+template <typename Traits>
+bool OperRpath::rewriteWithRpath(const string& path, const string& newRpath,
+                                 const RpathEntry<Traits>* entry)
+{
+    using Word = typename Traits::Word;
+    using Xword = typename Traits::Xword;
+    // 读旧 .dynstr 与 .dynamic 内容（只读）。
+    string oldDynstr;
+    string oldDynamic;
     {
         ElfPtrs<Traits> inspect(ElfOpenMode::ReadOnly);
         if (!inspect.initPtrs(path.c_str()))
@@ -136,17 +169,79 @@ bool OperRpath::setRpathForFile(const string& path, const string& newRpath, bool
             ErrorLog::getErrorLog()->putErrInfo("initTargetPtrs失败", path);
             return false;
         }
-        if (!resolveEntry(inspect, entry))
+        TableInfo<Traits>* tb_dynstr = inspect.getTableInfo(".dynstr");
+        if (!tb_dynstr)
         {
-            ErrorLog::getErrorLog()->putErrInfo("目标没有 DT_RPATH/DT_RUNPATH", path);
+            ErrorLog::getErrorLog()->putErrInfo("目标没有 .dynstr", path);
             return false;
         }
+        const char* base = reinterpret_cast<const char*>(inspect.elf_hdr);
+        oldDynstr.assign(base + tb_dynstr->addr->sh_offset, tb_dynstr->addr->sh_size);
+        typename Traits::Phdr* dynamic = inspect.findProgramHeader(PT_DYNAMIC);
+        if (!dynamic)
+        {
+            ErrorLog::getErrorLog()->putErrInfo("目标没有动态段，无法设置 RPATH", path);
+            return false;
+        }
+        oldDynamic.assign(base + dynamic->p_offset, dynamic->p_filesz);
     }
-    const size_t oldLen = entry.value.size();
+    // 新串追加到 .dynstr 末尾：旧串偏移全部保留。
+    const Xword newStringOffset = static_cast<Xword>(oldDynstr.size());
+    string newDynstr = oldDynstr;
+    newDynstr += newRpath;
+    newDynstr += '\0';
 
-    if (newRpath == entry.value)
+    vector<typename ElfRewriter<Traits>::SectionReplacement> replacements;
+    replacements.push_back({".dynstr", newDynstr});
+    map<Word, Xword> dynamicUpdates;
+    if (entry)
+    {
+        // 有 RPATH 条目：.dynamic 不动，只改该条目的 d_val。
+        dynamicUpdates[entry->tag] = newStringOffset;
+    }
+    else
+    {
+        // 无 RPATH 条目：.dynamic 也要搬家并插入新 DT_RUNPATH。
+        string newDynamic;
+        if (!buildDynamicWithRpath<Traits>(oldDynamic, newStringOffset, newDynamic))
+        {
+            ErrorLog::getErrorLog()->putErrInfo("无法在 .dynamic 中新增 RPATH 条目（可能含位置敏感条目）", path);
+            return false;
+        }
+        replacements.push_back({".dynamic", newDynamic});
+    }
+    if (!ElfRewriter<Traits>::rewriteFile(path, replacements, dynamicUpdates))
+        return false;
+    return verifyRpath<Traits>(path, newRpath);
+}
+
+template <typename Traits>
+bool OperRpath::setRpathForFile(const string& path, const string& newRpath, bool dryRun)
+{
+    RpathEntry<Traits> entry;
+    bool hasEntry = false;
+    {
+        ElfPtrs<Traits> inspect(ElfOpenMode::ReadOnly);
+        if (!inspect.initPtrs(path.c_str()))
+        {
+            ErrorLog::getErrorLog()->putErrInfo("initTargetPtrs失败", path);
+            return false;
+        }
+        if (!inspect.findProgramHeader(PT_DYNAMIC))
+        {
+            ErrorLog::getErrorLog()->putErrInfo("目标没有动态段，无法设置 RPATH", path);
+            return false;
+        }
+        hasEntry = resolveEntry(inspect, entry);
+    }
+    if (hasEntry && newRpath == entry.value)
     {
         cout << "  未改动（RPATH 已是目标值）: " << entry.value << "  文件:" << path << endl;
+        return true;
+    }
+    if (!hasEntry && newRpath.empty())
+    {
+        cout << "  未改动（目标本来就没有 RPATH）: " << path << endl;
         return true;
     }
     if (!validateNewRpath(newRpath))
@@ -154,58 +249,68 @@ bool OperRpath::setRpathForFile(const string& path, const string& newRpath, bool
         ErrorLog::getErrorLog()->putErrInfo("新 RPATH 语法无效：每段须为绝对路径或以 $ 开头（如 $ORIGIN）", path);
         return false;
     }
-    // 新串更长时无法原地容纳；加载器按 DT_STRTAB + 偏移从已映射内存读
-    // 串，追加到文件末尾的串读不到，因此也不能像解释器那样重写。
-    if (newRpath.size() + 1 > oldLen + 1)
-    {
-        ErrorLog::getErrorLog()->putErrInfo(
-            string("新 RPATH 过长，只支持等长或更短：新长度 ") + to_string(newRpath.size()) +
-            "，原长度 " + to_string(oldLen), path);
-        return false;
-    }
+    // 长度分流：等长或更短原地改；更长或无 RPATH 走文件重写。
+    const bool needsRewrite = !hasEntry || newRpath.size() + 1 > entry.value.size() + 1;
     if (dryRun)
     {
-        cout << "  试运行，将修改 " << entry.value << " ----> " << newRpath
-             << "  文件:" << path << endl;
+        if (hasEntry)
+            cout << "  试运行，将修改 " << entry.value << " ----> " << newRpath;
+        else
+            cout << "  试运行，将新增 RPATH " << newRpath;
+        if (needsRewrite) cout << "（需重写文件）";
+        cout << "  文件:" << path << endl;
         return true;
     }
-
-    unique_ptr<ElfPtrs<Traits>> targetPtrs(new ElfPtrs<Traits>(ElfOpenMode::ReadWrite));
-    if (!targetPtrs->initPtrs(path.c_str()))
+    if (!needsRewrite)
     {
-        ErrorLog::getErrorLog()->putErrInfo("initTargetPtrs失败", path);
-        return false;
+        unique_ptr<ElfPtrs<Traits>> targetPtrs(new ElfPtrs<Traits>(ElfOpenMode::ReadWrite));
+        if (!targetPtrs->initPtrs(path.c_str()))
+        {
+            ErrorLog::getErrorLog()->putErrInfo("initTargetPtrs失败", path);
+            return false;
+        }
+        RpathEntry<Traits> live;
+        if (!resolveEntry(*targetPtrs, live))
+        {
+            ErrorLog::getErrorLog()->putErrInfo("目标没有 DT_RPATH/DT_RUNPATH", path);
+            return false;
+        }
+        const char* tagName = live.tag == DT_RUNPATH ? "RUNPATH" : "RPATH";
+        char* base = reinterpret_cast<char*>(targetPtrs->elf_hdr);
+        char* str = base + live.fileOffset;
+        memcpy(str, newRpath.c_str(), newRpath.size() + 1);
+        if (newRpath.size() < live.value.size())
+            memset(str + newRpath.size() + 1, 0, live.value.size() - newRpath.size());
+        printf("  修改 RPATH (%s): %-27s ----> %-27s  文件:%s\n",
+               tagName, entry.value.c_str(), newRpath.c_str(), path.c_str());
+        if (!targetPtrs->flush()) return false;
+        return verifyRpath<Traits>(path, newRpath);
     }
-    RpathEntry<Traits> live;
-    if (!resolveEntry(*targetPtrs, live))
+    const RpathEntry<Traits>* entryPtr = hasEntry ? &entry : nullptr;
+    const bool ok = rewriteWithRpath<Traits>(path, newRpath, entryPtr);
+    if (ok)
     {
-        ErrorLog::getErrorLog()->putErrInfo("目标没有 DT_RPATH/DT_RUNPATH", path);
-        return false;
+        if (hasEntry)
+            printf("  修改 RPATH（重写文件）: %-27s ----> %-27s  文件:%s\n",
+                   entry.value.c_str(), newRpath.c_str(), path.c_str());
+        else
+            printf("  新增 RPATH（重写文件）: %s  文件:%s\n", newRpath.c_str(), path.c_str());
     }
-    const char* tagName = live.tag == DT_RUNPATH ? "RUNPATH" : "RPATH";
-    char* base = reinterpret_cast<char*>(targetPtrs->elf_hdr);
-    char* str = base + live.fileOffset;
-    memcpy(str, newRpath.c_str(), newRpath.size() + 1);
-    if (newRpath.size() < live.value.size())
-        memset(str + newRpath.size() + 1, 0, live.value.size() - newRpath.size());
-    printf("  修改 RPATH (%s): %-27s ----> %-27s  文件:%s\n",
-           tagName, entry.value.c_str(), newRpath.c_str(), path.c_str());
-    if (!targetPtrs->flush()) return false;
-    return verifyRpath<Traits>(path, newRpath);
+    return ok;
 }
 
 template <typename Traits>
 FileAdaptResult OperRpath::adaptOneFileFor(const string& path, const string& newRpath, bool dryRun)
 {
-    const int has = hasRpath<Traits>(path);
-    if (has < 0)
+    const RpathState state = rpathState<Traits>(path);
+    if (state == RpathState::Invalid)
     {
         ErrorLog::getErrorLog()->putErrInfo("目标不是有效的 ELF 文件", path);
         return FileAdaptResult::Failed;
     }
-    if (has == 0)
+    if (state == RpathState::NoDynamic)
     {
-        cout << "  跳过（无 RPATH）: " << path << endl;
+        cout << "  跳过（无动态段，不适用 RPATH）: " << path << endl;
         return FileAdaptResult::Skipped;
     }
     return setRpathForFile<Traits>(path, newRpath, dryRun)
@@ -215,9 +320,9 @@ FileAdaptResult OperRpath::adaptOneFileFor(const string& path, const string& new
 template <typename Traits>
 FileAdaptResult OperRpath::showOneFileFor(const string& path) const
 {
-    const int has = hasRpath<Traits>(path);
-    if (has < 0) return FileAdaptResult::Failed;
-    if (has == 0)
+    const RpathState state = rpathState<Traits>(path);
+    if (state == RpathState::Invalid) return FileAdaptResult::Failed;
+    if (state != RpathState::HasEntry)
     {
         cout << "  跳过（无 RPATH）: " << path << endl;
         return FileAdaptResult::Skipped;
@@ -278,7 +383,7 @@ bool OperRpath::adaptTargets(const string& path, const string& newRpath, bool dr
         }
         if (patched == 0)
         {
-            ErrorLog::getErrorLog()->putErrInfo("目录中没有带 RPATH 的可执行文件", path);
+            ErrorLog::getErrorLog()->putErrInfo("目录中没有可修改 RPATH 的动态文件", path);
             return false;
         }
         (void)skipped;

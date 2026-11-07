@@ -1,10 +1,13 @@
 """Run with: python3 tests/rpath_regression.py /path/to/cadapt
 
 RPATH support: an equal or shorter new path is patched in place inside
-.dynstr (the remaining bytes are zeroed). A longer path, a target
-without DT_RPATH/DT_RUNPATH, or a relative path component must fail
-and leave the file byte-for-byte unchanged. A patched executable must
-still run, and the new RPATH must actually be used to find its library.
+.dynstr (the remaining bytes are zeroed). A longer path rewrites the
+file patchelf-style: the new .dynstr is appended in a new PT_LOAD
+segment at the end of the file, DT_STRTAB/DT_STRSZ and the RPATH entry
+are re-pointed, and the program must still run using the new RPATH. A
+target without DT_RPATH/DT_RUNPATH gets a new DT_RUNPATH entry (growing
+.dynamic by one slot) the same way. A relative path component must fail
+and leave the file byte-for-byte unchanged.
 """
 import pathlib
 import shutil
@@ -53,6 +56,36 @@ def dynstr(data):
     return None
 
 
+def dynstr_addr(data):
+    """Return the .dynstr section's sh_addr."""
+    shoff = struct.unpack_from("<Q", data, 0x28)[0]
+    shentsize, shnum, shstrndx = struct.unpack_from("<HHH", data, 0x3a)
+    headers = []
+    for i in range(shnum):
+        sh_name, _, _, sh_addr, sh_offset, sh_size = struct.unpack_from(
+            "<IIQQQQ", data, shoff + i * shentsize)
+        headers.append((sh_name, sh_addr, sh_offset, sh_size))
+    str_off = headers[shstrndx][2]
+    for sh_name, sh_addr, sh_offset, sh_size in headers:
+        end = data.index(0, str_off + sh_name)
+        if data[str_off + sh_name:end] == b".dynstr":
+            return sh_addr
+    return None
+
+
+def load_segments(data):
+    """Return a list of (p_type, p_offset, p_vaddr, p_filesz) for PT_LOAD."""
+    phoff = struct.unpack_from("<Q", data, 32)[0]
+    entsize, count = struct.unpack_from("<HH", data, 54)
+    loads = []
+    for i in range(count):
+        p_type, _, p_offset, p_vaddr, _, p_filesz, _, _ = struct.unpack_from(
+            "<IIQQQQQQ", data, phoff + i * entsize)
+        if p_type == 1:  # PT_LOAD
+            loads.append((p_type, p_offset, p_vaddr, p_filesz))
+    return loads
+
+
 def rpath_of(data):
     """Return (tag, value, strtab_offset) or None."""
     entries = dynamic_entries(data)
@@ -95,6 +128,7 @@ with tempfile.TemporaryDirectory(prefix="cadapt-rpath-test-") as directory:
     lib = old_dir / "libfoo.so"
     subprocess.run(
         ["cc", "-shared", "-fPIC", str(foo_c), "-o", str(lib)], check=True)
+    lib_before = lib.read_bytes()
     shutil.copy2(lib, new_dir / "libfoo.so")
     shutil.copy2(lib, origin_lib / "libfoo.so")
 
@@ -151,6 +185,44 @@ with tempfile.TemporaryDirectory(prefix="cadapt-rpath-test-") as directory:
         assert after[strtab_off + offset + len(new_rpath) + 1:
                      strtab_off + offset + len(old_value) + 1] == b"\x00" * (
             len(old_value) - len(new_rpath))
+        if runs:
+            run = subprocess.run([str(target)], capture_output=True, text=True, timeout=20)
+            assert run.returncode == 0 and run.stdout == "foo=42\n", run
+        return after
+
+    def check_rewrite(target, new_rpath, runs=True, had_rpath=True):
+        """Longer RPATH (or no RPATH): file is rewritten, must still run."""
+        before = target.read_bytes()
+        old = rpath_of(before)
+        old_value = old[1] if old else None
+        old_loads = len(load_segments(before))
+        result = subprocess.run(
+            [str(binary), "-r", new_rpath, "-t", str(target)],
+            capture_output=True, text=True, timeout=20)
+        assert result.returncode == 0, (
+            new_rpath, result.returncode, result.stdout, result.stderr)
+        assert "重写文件" in result.stdout, result.stdout
+        after = target.read_bytes()
+        assert len(after) > len(before), "rewrite did not grow the file"
+        tag, value, offset = rpath_value(after)
+        assert value == new_rpath, (value, new_rpath)
+        # The new .dynstr is append-only: the old string is still there
+        # as dead bytes, so every old string offset stays valid.
+        strtab_off, strtab_size = dynstr(after)
+        if old_value is not None:
+            assert old_value.encode() in after[strtab_off:strtab_off + strtab_size]
+        # DT_STRTAB must point at the moved .dynstr, and a new PT_LOAD
+        # must cover it.
+        strtab_addr = dynstr_addr(after)
+        entries = dict(dynamic_entries(after))
+        assert entries.get(5) == strtab_addr, (entries.get(5), strtab_addr)  # DT_STRTAB
+        assert entries.get(10) == strtab_size, (entries.get(10), strtab_size)  # DT_STRSZ
+        new_loads = load_segments(after)
+        assert len(new_loads) == old_loads + 1, (len(new_loads), old_loads)
+        last = new_loads[-1]
+        assert last[1] + last[3] <= len(after), last
+        assert strtab_off >= last[1] and strtab_off < last[1] + last[3], (
+            strtab_off, last)
         if runs:
             run = subprocess.run([str(target)], capture_output=True, text=True, timeout=20)
             assert run.returncode == 0 and run.stdout == "foo=42\n", run
@@ -215,10 +287,25 @@ with tempfile.TemporaryDirectory(prefix="cadapt-rpath-test-") as directory:
         assert run.returncode != 0 and "libfoo.so" in run.stderr, run
         print("PASS: clear RPATH")
 
-        # Longer path: rejected, file unchanged.
-        check_patch(patched_copy("long-target"),
-                    str(old_dir) + "/even-longer-subdir-name", succeeds=False)
-        print("PASS: longer RPATH rejected")
+        # Longer path: the file is rewritten (patchelf-style), the new
+        # RPATH is actually used at runtime, and the old string survives
+        # as dead bytes in the appended .dynstr.
+        long_dir = root / "a-much-longer-libdir-name"
+        long_dir.mkdir()
+        shutil.copy2(lib, long_dir / "libfoo.so")
+        check_rewrite(patched_copy("long-target"), str(long_dir))
+        print("PASS: longer RPATH rewrites the file and still runs")
+
+        # Dry run of a longer path: reports the rewrite plan, changes nothing.
+        target = patched_copy("long-dry-target")
+        before = target.read_bytes()
+        result = subprocess.run(
+            [str(binary), "--dry-run", "-r", str(long_dir), "-t", str(target)],
+            capture_output=True, text=True, timeout=20)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "试运行" in result.stdout and "重写文件" in result.stdout, result.stdout
+        assert target.read_bytes() == before
+        print("PASS: dry-run of a longer RPATH")
 
         # Relative path component: rejected, file unchanged.
         check_patch(patched_copy("relative-target"), "relative/dir", succeeds=False)
@@ -233,26 +320,28 @@ with tempfile.TemporaryDirectory(prefix="cadapt-rpath-test-") as directory:
         assert tag == DT_RPATH, tag
         print("PASS: DT_RPATH target")
 
-        # A binary without any RPATH: rejected, file unchanged.
+        # Old-style DT_RPATH target with a longer path: rewritten, tag kept.
+        target = patched_copy("oldtag-long-target", exe_rpath)
+        after = check_rewrite(target, str(long_dir))
+        tag, _, _ = rpath_value(after)
+        assert tag == DT_RPATH, tag
+        print("PASS: DT_RPATH target, longer path")
+
+        # A binary without any RPATH: a new DT_RUNPATH is added (growing
+        # .dynamic by one slot) and the program runs via the new RPATH.
         target = patched_copy("plain-target", exe_plain)
-        before = target.read_bytes()
-        result = subprocess.run(
-            [str(binary), "-r", str(new_dir), "-t", str(target)],
-            capture_output=True, text=True, timeout=20)
-        assert result.returncode != 0, result.stdout + result.stderr
-        assert target.read_bytes() == before
-        print("PASS: no-RPATH target rejected")
+        check_rewrite(target, str(new_dir), had_rpath=False)
+        print("PASS: RPATH added to a binary without one")
 
-        # A shared library has no RPATH either.
-        lib_before = lib.read_bytes()
-        result = subprocess.run(
-            [str(binary), "-r", str(new_dir), "-t", str(lib)],
-            capture_output=True, text=True, timeout=20)
-        assert result.returncode != 0, result.stdout + result.stderr
-        assert lib.read_bytes() == lib_before
-        print("PASS: no-RPATH library rejected")
+        # A shared library has no RPATH either: one is added.
+        lib_target = root / "libfoo-patched.so"
+        shutil.copy2(lib, lib_target)
+        before = lib_target.read_bytes()
+        check_rewrite(lib_target, str(new_dir), runs=False, had_rpath=False)
+        print("PASS: RPATH added to a library")
 
-        # Directory: the executable is patched, the library is skipped.
+        # Directory: the executable is patched in place (shorter RPATH)
+        # and the library gains an RPATH (it had none).
         batch = root / "batch"
         batch.mkdir()
         batch_exe = batch / "hello"
@@ -264,12 +353,13 @@ with tempfile.TemporaryDirectory(prefix="cadapt-rpath-test-") as directory:
             capture_output=True, text=True, timeout=20)
         assert result.returncode == 0, result.stdout + result.stderr
         assert rpath_value(batch_exe.read_bytes())[1] == str(new_dir)
-        assert batch_lib.read_bytes() == lib_before
+        assert rpath_value(batch_lib.read_bytes())[1] == str(new_dir)
         run = subprocess.run([str(batch_exe)], capture_output=True, text=True, timeout=20)
         assert run.returncode == 0 and run.stdout == "foo=42\n", run
         print("PASS: directory scan")
 
-        # Directory with no RPATH at all: fails, changes nothing.
+        # Directory with only a library without RPATH: the library gets
+        # an RPATH added, so the run succeeds.
         only_lib = root / "only-lib"
         only_lib.mkdir()
         only = only_lib / "libfoo.so"
@@ -277,9 +367,26 @@ with tempfile.TemporaryDirectory(prefix="cadapt-rpath-test-") as directory:
         result = subprocess.run(
             [str(binary), "-r", str(new_dir), "-t", str(only_lib)],
             capture_output=True, text=True, timeout=20)
-        assert result.returncode != 0, result.stdout + result.stderr
-        assert only.read_bytes() == lib_before
-        print("PASS: directory without RPATH rejected")
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert rpath_value(only.read_bytes())[1] == str(new_dir)
+        print("PASS: directory with only a library gains an RPATH")
+
+        # Directory with a longer RPATH: both files are rewritten.
+        batch2 = root / "batch2"
+        batch2.mkdir()
+        batch2_exe = batch2 / "hello"
+        shutil.copy2(exe_runpath, batch2_exe)
+        batch2_lib = batch2 / "libfoo.so"
+        shutil.copy2(lib, batch2_lib)
+        result = subprocess.run(
+            [str(binary), "-r", str(long_dir), "-t", str(batch2)],
+            capture_output=True, text=True, timeout=20)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert rpath_value(batch2_exe.read_bytes())[1] == str(long_dir)
+        assert rpath_value(batch2_lib.read_bytes())[1] == str(long_dir)
+        run = subprocess.run([str(batch2_exe)], capture_output=True, text=True, timeout=20)
+        assert run.returncode == 0 and run.stdout == "foo=42\n", run
+        print("PASS: directory with a longer RPATH")
 
         # Combined with --print-interp: both print, nothing changes.
         target = patched_copy("both-print-target")

@@ -185,3 +185,53 @@ void ElfUtils::logIdentifyFailure(const std::string& path)
     ElfPtrs<Elf64Traits> probe(ElfOpenMode::ReadOnly);
     probe.initPtrs(path);
 }
+
+TempFileGuard::~TempFileGuard()
+{
+    if (fd >= 0) close(fd);
+    if (!committed && !path.empty()) unlink(path.c_str());
+}
+
+bool ElfUtils::copyFileTo(int srcFd, int dstFd)
+{
+    char buffer[65536];
+    while (true)
+    {
+        ssize_t n = read(srcFd, buffer, sizeof(buffer));
+        if (n < 0)
+        {
+            if (errno == EINTR) continue;
+            return false;
+        }
+        if (n == 0) return true;
+        if (!writeAll(dstFd, buffer, static_cast<size_t>(n))) return false;
+    }
+}
+
+bool ElfUtils::writeAll(int fd, const void* data, size_t size)
+{
+    const char* p = static_cast<const char*>(data);
+    size_t off = 0;
+    while (off < size)
+    {
+        ssize_t w = write(fd, p + off, size - off);
+        if (w < 0)
+        {
+            if (errno == EINTR) continue;
+            return false;
+        }
+        off += static_cast<size_t>(w);
+    }
+    return true;
+}
+
+bool ElfUtils::fsyncDirectory(const std::string& filePath)
+{
+    const size_t slash = filePath.find_last_of('/');
+    const std::string dir = slash == std::string::npos ? "." : filePath.substr(0, slash + 1);
+    const int dirFd = open(dir.c_str(), O_RDONLY);
+    if (dirFd < 0) return false;
+    const bool ok = fsync(dirFd) == 0;
+    close(dirFd);
+    return ok;
+}

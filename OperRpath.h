@@ -5,15 +5,17 @@
 #include <memory>
 #include "ElfPtrs.h"
 #include "ElfUtils.h"
+#include "ElfRewrite.h"
 
 // ELF 运行库搜索路径（DT_RPATH / DT_RUNPATH）适配。
 //
-// 只支持等长或更短的新路径：新串原地写进 .dynstr，剩余字节补零。
-// 更长的新路径会被拒绝且不修改文件：RPATH 串由加载器按 DT_STRTAB +
-// 偏移从已映射内存读取，无法像 PT_INTERP 那样追加到文件末尾；要容纳
-// 更长的串需要重排整个文件并新增 LOAD 段（patchelf 的做法），超出本
-// 次范围。没有 DT_RPATH/DT_RUNPATH 的目标同样会被拒绝（动态段一般没
-// 有空闲槽位可供新增条目）。
+// 等长或更短的新路径：新串原地写进 .dynstr，剩余字节补零。
+// 更长的新路径：走 patchelf 式文件重写（见 ElfRewrite）——新 .dynstr
+// 追加到文件末尾的新 LOAD 段里，DT_STRTAB/DT_STRSZ 与 RPATH 条目的
+// d_val 按新位置重算；其余内容与全部偏移保持不动。没有
+// DT_RPATH/DT_RUNPATH 的目标同样走重写：.dynamic 增长一个
+// Elf_Dyn 槽位并在最前面插入一条新的 DT_RUNPATH，同时把新串追加到
+// .dynstr。静态文件（无 PT_DYNAMIC）无法设置 RPATH。
 // 若同时存在两项，优先改 DT_RUNPATH（现代链接器默认），只读查看时两
 // 项都会打印；空字符串表示清空。
 //
@@ -26,14 +28,18 @@ public:
     OperRpath() = default;
     ~OperRpath() = default;
 
-    // 修改单个文件或目录下所有带 RPATH 的 ELF。dryRun 只打印将要做的
-    // 修改，不写文件。目录中无 RPATH 的文件会被跳过，不计为失败；但
-    // 只要有一个带 RPATH 的文件修改失败，整体返回 false。
+    // 修改单个文件或目录下所有动态 ELF 的 RPATH。dryRun 只打印将要做的
+    // 修改，不写文件。目录中不适用 RPATH 的文件会被跳过，不计为失败；
+    // 但只要有一个适用文件修改失败，整体返回 false。
     bool adaptTargets(const std::string& path, const std::string& newRpath, bool dryRun);
     // 打印单个文件或目录下各文件的当前 RPATH；无 RPATH 返回 false。
     bool showTargets(const std::string& path);
 
 private:
+    // 目标的 RPATH 状态：无效 ELF / 有效但无动态段 / 有动态段但无
+    // RPATH / 有 RPATH。
+    enum class RpathState { Invalid, NoDynamic, NoEntry, HasEntry };
+
     // .dynamic 中 RPATH/RUNPATH 条目的解析结果。
     template <typename Traits>
     struct RpathEntry
@@ -48,9 +54,8 @@ private:
     FileAdaptResult adaptOneFile(const std::string& path, const std::string& newRpath, bool dryRun);
     FileAdaptResult showOneFile(const std::string& path) const;
 
-    // 1: 有 RPATH，0: 有效 ELF 但无 RPATH，-1: 不是有效 ELF。
     template <typename Traits>
-    int hasRpath(const std::string& path) const;
+    RpathState rpathState(const std::string& path) const;
     template <typename Traits>
     FileAdaptResult adaptOneFileFor(const std::string& path, const std::string& newRpath, bool dryRun);
     template <typename Traits>
@@ -69,6 +74,18 @@ private:
     bool setRpathForFile(const std::string& path, const std::string& newRpath, bool dryRun);
     template <typename Traits>
     bool showRpathForFile(const std::string& path) const;
+    // 更长的新路径或无 RPATH 的目标：走文件重写。调用前已校验语法、
+    // 排除 no-op；失败时原文件保持不变。
+    template <typename Traits>
+    bool rewriteWithRpath(const std::string& path, const std::string& newRpath,
+                          const RpathEntry<Traits>* entry);
+    // 在 .dynamic 最前面插入一条 DT_RUNPATH（值 = 新串在 .dynstr 中的
+    // 偏移），其余条目下移一位，DT_NULL 仍在末尾。DT_MIPS_RLD_MAP_REL
+    // 的值与自身槽位地址相关，存在时拒绝（无法随 .dynamic 一起搬家）。
+    template <typename Traits>
+    bool buildDynamicWithRpath(const std::string& oldDynamic,
+                               typename Traits::Xword newStringOffset,
+                               std::string& newDynamic) const;
     // 写盘后重读验证：解析出的值与预期一致。
     template <typename Traits>
     bool verifyRpath(const std::string& path, const std::string& expected) const;
