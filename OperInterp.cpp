@@ -33,56 +33,6 @@ void warnNoMatchingInterpreter(const std::string& targetPath, const ElfIdentity&
     ErrorLog::getErrorLog()->putErrInfo(message, targetPath);
 }
 
-// 同目录临时文件的守卫：提交（rename）前析构会关闭 fd 并删除临时文件。
-struct TempFileGuard {
-    int fd;
-    std::string path;
-    bool committed;
-    TempFileGuard() : fd(-1), committed(false) {}
-    ~TempFileGuard()
-    {
-        if (fd >= 0) close(fd);
-        if (!committed && !path.empty()) unlink(path.c_str());
-    }
-};
-
-bool copyFileTo(int srcFd, int dstFd)
-{
-    char buffer[65536];
-    while (true)
-    {
-        ssize_t n = read(srcFd, buffer, sizeof(buffer));
-        if (n < 0)
-        {
-            if (errno == EINTR) continue;
-            return false;
-        }
-        if (n == 0) return true;
-        ssize_t off = 0;
-        while (off < n)
-        {
-            ssize_t w = write(dstFd, buffer + off, static_cast<size_t>(n - off));
-            if (w < 0)
-            {
-                if (errno == EINTR) continue;
-                return false;
-            }
-            off += w;
-        }
-    }
-}
-
-bool fsyncDirectory(const std::string& filePath)
-{
-    const size_t slash = filePath.find_last_of('/');
-    const std::string dir = slash == std::string::npos ? "." : filePath.substr(0, slash + 1);
-    const int dirFd = open(dir.c_str(), O_RDONLY);
-    if (dirFd < 0) return false;
-    const bool ok = fsync(dirFd) == 0;
-    close(dirFd);
-    return ok;
-}
-
 } // namespace
 
 template <typename Traits>
@@ -231,7 +181,7 @@ bool OperInterp::rewriteWithLongerInterpreter(const string& path, const string& 
         return false;
     }
     const int srcFd = open(path.c_str(), O_RDONLY);
-    if (srcFd < 0 || !copyFileTo(srcFd, tmp.fd))
+    if (srcFd < 0 || !ElfUtils::copyFileTo(srcFd, tmp.fd))
     {
         if (srcFd >= 0) close(srcFd);
         ErrorLog::getErrorLog()->putErrInfo("复制原文件失败", path);
@@ -318,7 +268,7 @@ bool OperInterp::rewriteWithLongerInterpreter(const string& path, const string& 
         return false;
     }
     tmp.committed = true;
-    (void)fsyncDirectory(path);
+    (void)ElfUtils::fsyncDirectory(path);
 
     if (!verifyInterpreter<Traits>(path, newInterp))
     {

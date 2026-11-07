@@ -100,6 +100,38 @@ def elf32_runpath(data):
     return value
 
 
+def elf32_dynamic_value(data, tag):
+    """Return the d_val/d_ptr of the first .dynamic entry with the tag."""
+    phoff = struct.unpack_from("<I", data, 28)[0]
+    entsize, count = struct.unpack_from("<HH", data, 42)
+    dynamic = None
+    for i in range(count):
+        p_type, p_offset, _, _, p_filesz = struct.unpack_from(
+            "<IIIII", data, phoff + i * entsize)
+        if p_type == 2:  # PT_DYNAMIC
+            dynamic = (p_offset, p_filesz)
+    assert dynamic is not None, "no PT_DYNAMIC"
+    offset, size = dynamic
+    for j in range(0, size, 8):
+        entry_tag, val = struct.unpack_from("<iI", data, offset + j)
+        if entry_tag == 0:
+            break
+        if entry_tag == tag:
+            return val
+    return None
+
+
+def elf32_load_count(data):
+    phoff = struct.unpack_from("<I", data, 28)[0]
+    entsize, count = struct.unpack_from("<HH", data, 42)
+    loads = 0
+    for i in range(count):
+        p_type = struct.unpack_from("<I", data, phoff + i * entsize)[0]
+        if p_type == 1:  # PT_LOAD
+            loads += 1
+    return loads
+
+
 def elf32_verneed_names(data):
     """返回目标 .gnu.version_r 中 libc.so.6 的版本名列表。"""
     tables = elf32_sections(data)
@@ -227,9 +259,30 @@ with tempfile.TemporaryDirectory(prefix="cadapt-elf32-test-") as directory:
     target = root / "rpath-long"
     shutil.copy2(hello32, target)
     before = target.read_bytes()
-    run_cadapt(["-r", "/opt/a-much-longer-runpath-than-before", "-t", str(target)],
-               succeeds=False)
-    assert target.read_bytes() == before
+    before_loads = elf32_load_count(before)
+    run_cadapt(["-r", "/opt/a-much-longer-runpath-than-before", "-t", str(target)])
+    data = target.read_bytes()
+    assert len(data) > len(before), "rewrite did not grow the file"
+    assert elf32_runpath(data) == "/opt/a-much-longer-runpath-than-before"
+    # DT_STRTAB 指向被搬走的 .dynstr，且新增了一个 PT_LOAD 段。
+    assert elf32_dynamic_value(data, 5) == elf32_sections(data)[".dynstr"][3]
+    assert elf32_load_count(data) == before_loads + 1
+    result = run_cadapt(["--print-rpath", "-t", str(target)])
+    assert "/opt/a-much-longer-runpath-than-before" in result.stdout
+
+    # 无 RPATH 的 32 位目标：新增 DT_RUNPATH（.dynamic 增长一个槽位）。
+    plain32 = root / "hello32-plain"
+    subprocess.run(["cc", "-m32", "-nostdlib", str(start_c),
+                    "-Wl,-dynamic-linker," + str(orig_interp),
+                    "-o", str(plain32)], check=True)
+    assert elf32_runpath(plain32.read_bytes()) is None
+    before = plain32.read_bytes()
+    run_cadapt(["-r", "/opt/new-rpath-32", "-t", str(plain32)])
+    data = plain32.read_bytes()
+    assert len(data) > len(before), "rewrite did not grow the file"
+    assert elf32_runpath(data) == "/opt/new-rpath-32"
+    assert elf32_dynamic_value(data, 5) == elf32_sections(data)[".dynstr"][3]
+    assert elf32_load_count(data) == elf32_load_count(before) + 1
 
     # ---- GLIBC：32 位 ----
     def build_library32(name, source, versions):
