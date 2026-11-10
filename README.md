@@ -18,7 +18,10 @@ CAdapt 是面向 Linux 的 ELF 元数据修补工具，可调整已编译程序�
 ## 功能
 
 - **GLIBC**：读取指定 `libc.so.6` 的符号版本，适配单个 ELF 或目录；原版本可用时优先保留，保留符号隐藏标记。
+- **动态链接器**：修改 ELF 的 `PT_INTERP` 解释器路径。等长或更短的新路径原地改写，剩余字节补零；更长的新路径会重写文件——新串追加到文件末尾，`PT_INTERP` 与 `.interp` 节区改指向新位置，其余内容与全部偏移保持不动。写入前校验新解释器存在、可执行、为同架构 `ET_DYN` 且本身无 `PT_INTERP`，写入后重读验证。可用 `-p` 只查看、`--dry-run` 只试运行。
+- **RPATH**：修改 ELF 的 `DT_RPATH`/`DT_RUNPATH` 运行库搜索路径。等长或更短的新路径原地改写进 `.dynstr`，剩余字节补零；更长路径会重写文件——新 `.dynstr` 追加到文件末尾的新 LOAD 段里，`DT_STRTAB`/`DT_STRSZ` 与 RPATH 条目按新位置重算（patchelf 的做法）；无 RPATH 的目标会新增一条 `DT_RUNPATH`（`.dynamic` 增长一个槽位）。同时存在两项时优先改 `DT_RUNPATH`。可用 `--print-rpath` 只查看、`--dry-run` 只试运行，空字符串表示清空。
 - **KMOD**：修改 `.ko` 的 `vermagic` 与传统 `__versions` 格式的符号 CRC。
+- **32 位与多候选**：支持 32 位与 64 位小端 ELF。`-c`（libc）与 `-i`（解释器）均可重复指定（如 32 位与 64 位各一个），每个目标按类别、字节序、机器架构挑选匹配的候选；目录可同时包含两种文件。指定的 libc/解释器与目标不匹配时警告并跳过该文件；大端 ELF 暂不支持，警告并跳过。32 位内核模块的 `__versions` 条目用 4 字节 CRC；目标模块架构与当前系统不一致、而符号 CRC 或 `vermagic` 又取自当前系统时，警告并拒绝修改。
 
 ## 构建与检查
 
@@ -43,6 +46,15 @@ ctest --test-dir build --output-on-failure
 # KMOD
 ./build/cadapt -m ./my_driver.ko -s ./Module.symvers \
   -v "4.18.0-193.el8.x86_64 SMP mod_unload"
+
+# 动态链接器（解释器）
+./build/cadapt -i /lib64/ld-linux-x86-64.so.2 -t ./my_program
+./build/cadapt -p -t ./my_program
+./build/cadapt -i /lib64/ld-linux-x86-64.so.2 -t ./my_program --dry-run
+
+# 混合目录：32 位与 64 位目标各自匹配对应的 libc/解释器
+./build/cadapt -c /lib/libc.so.6 -c /lib64/libc.so.6 -t ./mixed_dir
+./build/cadapt -i /lib/ld-linux.so.2 -i /lib64/ld-linux-x86-64.so.2 -t ./mixed_dir
 ```
 
 ### 参数与行为
@@ -64,7 +76,9 @@ ctest --test-dir build --output-on-failure
 
 ## 支持范围与风险
 
-- 当前支持带节头表的 **64 位小端 ELF**；不支持 32 位、大端或扩展节区编号。
+- 当前支持带节头表的 **32 位与 64 位小端 ELF**；不支持大端或扩展节区编号。
+- 解释器适配：更长路径会重写文件（临时文件 + 原子替换），新文件换 inode，符号链接目标会被拒绝；`.interp` 节区的 `sh_addr` 仍指向旧位置（只改 `sh_offset`/`sh_size`），以 `PT_INTERP` 为准。
+- RPATH 适配：更长路径会重写文件（临时文件 + 原子替换），新文件换 inode，符号链接目标会被拒绝；新段的虚址取所有 LOAD 段最高虚址之上，程序头表无空闲槽位时会整个搬到新段里（ET_EXEC 且原来没有 `PT_PHDR` 时补一个）。
 - 扩展 KMOD 节区 `__version_ext_names` / `__version_ext_crcs` 会明确拒绝修改。
 - 工具原地修改文件，请先备份。仅修改元数据，无法检查或修复 ABI 差异；程序仍可能崩溃，错误的内核模块可能引发 Kernel Panic/Oops。
 - 错误日志写入可执行文件目录下的 `cadaptErrlog.txt`；日志不可写时会输出到 stderr。

@@ -1,5 +1,24 @@
 #include "ExistingModInfo.h"
+#include "ElfUtils.h"
 #include <unistd.h>
+
+namespace {
+
+// 按模块自身的 ELF 类别读取 vermagic 与符号 CRC；类别无关的结果
+// （字符串与 unsigned long）供上层合并。系统模块与本机内核同架构，
+// 理论上都是本机类别；分发一次即可同时覆盖 32 位主机。
+template <typename Traits>
+bool readSystemModule(const std::string& path, std::string& vermagic,
+                      std::map<std::string, unsigned long>& syms)
+{
+    ElfSymInfos<Traits> infos(path, ElfOpenMode::ReadOnly, false);
+    if (!infos.isValid()) return false;
+    vermagic = infos.getVermagic();
+    syms = infos.getSymVerInfo();
+    return true;
+}
+
+} // namespace
 
 using namespace std;
 ExistingModInfo::ExistingModInfo()
@@ -112,10 +131,15 @@ void ExistingModInfo::initAllSymbolVerInfo()
 {
     for(auto it = m_kmods.begin(); it != m_kmods.end(); ++it)
     {
-        ElfSymInfos infos(it->second,ElfOpenMode::ReadOnly,false);
-        if (!infos.isValid()) continue;
+        std::string newVermagic;
+        map<string, unsigned long> tmp;
+        ElfIdentity id;
+        if (!ElfUtils::identifyElf(it->second, id) || id.elfData == ELFDATA2MSB) continue;
+        const bool ok = id.elfClass == ELFCLASS64
+            ? readSystemModule<Elf64Traits>(it->second, newVermagic, tmp)
+            : readSystemModule<Elf32Traits>(it->second, newVermagic, tmp);
+        if (!ok) continue;
         // 获取版本魔术
-        string newVermagic = infos.getVermagic();
         if(m_vermagic.empty())
             m_vermagic = newVermagic;
         else if(m_vermagic != newVermagic)
@@ -127,7 +151,6 @@ void ExistingModInfo::initAllSymbolVerInfo()
         }
         else {}
         // 获取现有驱动的所有符号的CRC信息
-        map<string, unsigned long> tmp = infos.getSymVerInfo();
         for(auto it2 = tmp.begin(); it2 != tmp.end(); ++it2)
         {
             auto index = m_va_infos.find(it2->first);
@@ -154,5 +177,20 @@ void ExistingModInfo::initAllSymbolVerInfo()
 //            printf("\tname = %-32s crc = %lx\n",it.first.c_str(),it.second);
 //        }
 //    }
+}
+
+unsigned short ExistingModInfo::hostMachine() const
+{
+    const std::string machine = m_system_info.machine;
+    if (machine == "x86_64") return EM_X86_64;
+    if (machine == "i386" || machine == "i486" || machine == "i586" || machine == "i686") return EM_386;
+    if (machine == "aarch64") return EM_AARCH64;
+    if (machine.rfind("arm", 0) == 0) return EM_ARM;
+    if (machine == "riscv64" || machine == "riscv32") return EM_RISCV;
+    if (machine == "ppc64" || machine == "ppc64le") return EM_PPC64;
+    if (machine == "ppc") return EM_PPC;
+    if (machine == "s390x") return EM_S390;
+    if (machine == "mips" || machine == "mips64") return EM_MIPS;
+    return 0;
 }
 
